@@ -1,83 +1,113 @@
-package client_home
+package auth
 
 import (
 	"context"
 	"errors"
-	"time"
-	_ "time/tzdata"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
-	ErrDadosInvalidos = errors.New(
-		"salao_id e auth_user_id são obrigatórios",
-	)
+	ErrDadosInvalidos = errors.New("email e senha são obrigatórios")
+	ErrCredenciais    = errors.New("email ou senha incorretos")
+	ErrProfInativo    = errors.New("este profissional está inativo")
+	ErrSalaoInvalido  = errors.New("id_salao inválido")
 )
-
-// "Agora" sempre em horário de Brasília.
-var localBR = func() *time.Location {
-	loc, err := time.LoadLocation("America/Sao_Paulo")
-	if err != nil {
-		return time.FixedZone("BRT", -3*60*60)
-	}
-	return loc
-}()
 
 type Service struct {
 	repository *Repository
 }
 
 func NewService(repository *Repository) *Service {
-	return &Service{
-		repository: repository,
-	}
+	return &Service{repository: repository}
 }
 
-func (s *Service) Buscar(
+func validarLogin(req LoginRequest) error {
+	if req.IDSalao <= 0 {
+		return ErrSalaoInvalido
+	}
+
+	if strings.TrimSpace(req.Email) == "" ||
+		req.Senha == "" {
+		return ErrDadosInvalidos
+	}
+
+	return nil
+}
+
+func senhaCorreta(senha, hash string) bool {
+	if hash == "" {
+		return false
+	}
+
+	return bcrypt.CompareHashAndPassword(
+		[]byte(hash),
+		[]byte(senha),
+	) == nil
+}
+
+func (s *Service) LoginAdmin(
 	ctx context.Context,
-	req ClientHomeRequest,
-) (*ClientHomeData, error) {
-	if req.SalaoID <= 0 || req.AuthUserID <= 0 {
-		return nil, ErrDadosInvalidos
-	}
-
-	salao, err := s.repository.BuscarSalao(
-		ctx,
-		req.SalaoID,
-	)
-	if err != nil {
+	req LoginRequest,
+) (*AdminResponse, error) {
+	if err := validarLogin(req); err != nil {
 		return nil, err
 	}
 
-	textos, err := s.repository.BuscarTextos(
-		ctx,
-		req.SalaoID,
+	admin, err := s.repository.BuscarAdmin(
+		ctx, req.IDSalao, strings.TrimSpace(req.Email),
 	)
 	if err != nil {
+		if errors.Is(err, ErrUsuarioNaoEncontrado) {
+			return nil, ErrCredenciais
+		}
 		return nil, err
 	}
 
-	profissionais, err := s.repository.BuscarProfissionais(
-		ctx,
-		req.SalaoID,
-	)
-	if err != nil {
+	if !senhaCorreta(req.Senha, admin.SenhaHash) {
+		return nil, ErrCredenciais
+	}
+
+	return &AdminResponse{
+		ID:       admin.ID,
+		Nome:     admin.Nome,
+		Email:    admin.Email,
+		CriadoEm: admin.CriadoEm,
+	}, nil
+}
+
+func (s *Service) LoginProfissional(
+	ctx context.Context,
+	req LoginRequest,
+) (*ProfissionalResponse, error) {
+	if err := validarLogin(req); err != nil {
 		return nil, err
 	}
 
-	proximoAgendamento, err := s.repository.BuscarProximoAgendamento(
-		ctx,
-		req.SalaoID,
-		req.AuthUserID,
-		time.Now().In(localBR),
+	profissional, err := s.repository.BuscarProfissional(
+		ctx, req.IDSalao, strings.TrimSpace(req.Email),
 	)
 	if err != nil {
+		if errors.Is(err, ErrUsuarioNaoEncontrado) {
+			return nil, ErrCredenciais
+		}
 		return nil, err
 	}
 
-	return &ClientHomeData{
-		Textos:             textos,
-		Salao:              salao,
-		Profissionais:      profissionais,
-		ProximoAgendamento: proximoAgendamento,
+	if !profissional.Ativo {
+		return nil, ErrProfInativo
+	}
+
+	if !senhaCorreta(req.Senha, profissional.SenhaHash) {
+		return nil, ErrCredenciais
+	}
+
+	return &ProfissionalResponse{
+		ID:            profissional.ID,
+		Nome:          profissional.Nome,
+		Email:         profissional.Email,
+		Especialidade: profissional.Especialidade,
+		Img:           profissional.Img,
 	}, nil
 }
