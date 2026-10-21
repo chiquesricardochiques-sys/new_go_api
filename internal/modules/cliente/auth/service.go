@@ -87,7 +87,6 @@ func (s *Service) Adicionar(
 	if err != nil {
 		return nil, false, err
 	}
-
 	return &RelacaoResponse{
 		IDCliente: idCliente,
 	}, criado, nil

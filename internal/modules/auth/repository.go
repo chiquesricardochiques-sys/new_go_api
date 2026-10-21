@@ -1,294 +1,189 @@
-package client_home
+package auth
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 )
 
-const layoutDataHora = "2006-01-02 15:04:05"
-
-var (
-	ErrSalaoNaoEncontrado   = errors.New("salão não encontrado")
-	ErrClienteNaoEncontrado = errors.New("cliente não encontrado")
-)
+var ErrUsuarioNaoEncontrado = errors.New("usuário não encontrado")
 
 type Repository struct {
 	db *sql.DB
 }
 
 func NewRepository(db *sql.DB) *Repository {
-	return &Repository{
-		db: db,
-	}
+	return &Repository{db: db}
 }
 
-func (r *Repository) BuscarTextos(
-	ctx context.Context,
-	salaoID int64,
-) (map[string]string, error) {
-	const query = `
-		SELECT
-			chave,
-			conteudo
-		FROM textos_salao
-		WHERE salao_id = ?
-		ORDER BY chave ASC
-	`
+type Admin struct {
+	ID        int64
+	IDSalao   int64
+	AuthUserID int64
+	Nome      string
+	Email     string
+	SenhaHash string
+	CriadoEm  string
+}
 
-	rows, err := r.db.QueryContext(
-		ctx,
-		query,
-		salaoID,
+type Profissional struct {
+	ID            int64
+	IDSalao       int64
+	Nome          string
+	Email         string
+	SenhaHash     string
+	Especialidade string
+	Img           string
+	Ativo         bool
+}
+
+// BuscarAdmin procura o vínculo do usuário com o salão.
+// A senha deve ser validada pelo serviço AUTH externo.
+func (r *Repository) BuscarAdmin(
+	ctx context.Context,
+	idSalao int64,
+	email string,
+) (*Admin, error) {
+	// A tabela salao_admins não contém e-mail ou senha.
+	// Por isso, o ID do usuário precisa ser resolvido pelo AUTH
+	// antes de consultar o vínculo administrativo.
+	return nil, fmt.Errorf(
+		"BuscarAdmin requer o auth_user_id obtido pelo AUTH externo; salão=%d, email=%q",
+		idSalao,
+		email,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	textos := make(map[string]string)
-
-	for rows.Next() {
-		var (
-			chave    string
-			conteudo string
-		)
-
-		if err := rows.Scan(
-			&chave,
-			&conteudo,
-		); err != nil {
-			return nil, err
-		}
-
-		textos[chave] = conteudo
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return textos, nil
 }
 
-func (r *Repository) BuscarSalao(
+// BuscarAdminPorAuthUserID verifica o vínculo administrativo
+// usando o ID do usuário validado pelo AUTH externo.
+func (r *Repository) BuscarAdminPorAuthUserID(
 	ctx context.Context,
-	salaoID int64,
-) (*Salao, error) {
+	idSalao int64,
+	authUserID int64,
+) (*Admin, error) {
 	const query = `
 		SELECT
-			id,
-			nome,
-			telefone,
-			email,
-			whatsapp,
-			endereco,
-			cidade,
-			estado,
-			cep,
-			latitude,
-			longitude,
-			logo_url
-		FROM saloes
-		WHERE id = ?
-			AND status = 'ativo'
+			sa.id,
+			sa.salao_id,
+			sa.auth_user_id,
+			s.nome,
+			COALESCE(s.email, ''),
+			sa.created_at
+		FROM salao_admins sa
+		INNER JOIN saloes s
+			ON s.id = sa.salao_id
+		WHERE sa.salao_id = ?
+			AND sa.auth_user_id = ?
+			AND sa.status = 'ativo'
+			AND s.status = 'ativo'
 		LIMIT 1
 	`
 
-	var salao Salao
+	var admin Admin
+	var criadoEm time.Time
 
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
-		salaoID,
+		idSalao,
+		authUserID,
 	).Scan(
-		&salao.ID,
-		&salao.Nome,
-		&salao.Telefone,
-		&salao.Email,
-		&salao.Whatsapp,
-		&salao.Endereco,
-		&salao.Cidade,
-		&salao.Estado,
-		&salao.CEP,
-		&salao.Latitude,
-		&salao.Longitude,
-		&salao.LogoURL,
+		&admin.ID,
+		&admin.IDSalao,
+		&admin.AuthUserID,
+		&admin.Nome,
+		&admin.Email,
+		&criadoEm,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrSalaoNaoEncontrado
+		return nil, ErrUsuarioNaoEncontrado
 	}
-
 	if err != nil {
 		return nil, err
 	}
 
-	return &salao, nil
+	admin.CriadoEm = criadoEm.Format(time.RFC3339)
+	return &admin, nil
 }
 
-func (r *Repository) BuscarProfissionais(
+// BuscarProfissional consulta a tabela atual de profissionais.
+// A autenticação e a senha devem ser verificadas pelo AUTH externo.
+func (r *Repository) BuscarProfissional(
 	ctx context.Context,
-	salaoID int64,
-) ([]Profissional, error) {
+	idSalao int64,
+	email string,
+) (*Profissional, error) {
+	// A tabela profissionais fornecida não possui email nem senha_hash.
+	// É necessário obter o auth_user_id do AUTH e relacioná-lo
+	// ao profissional por meio do vínculo definido no seu sistema.
+	return nil, fmt.Errorf(
+		"BuscarProfissional requer o vínculo do usuário com profissionais; salão=%d, email=%q",
+		idSalao,
+		email,
+	)
+}
+
+// BuscarProfissionalPorID consulta um profissional pelo ID
+// e pelo salão ao qual pertence.
+func (r *Repository) BuscarProfissionalPorID(
+	ctx context.Context,
+	idSalao int64,
+	profissionalID int64,
+) (*Profissional, error) {
 	const query = `
 		SELECT
 			id,
+			salao_id,
 			nome,
-			especialidade,
-			foto_url
+			COALESCE(especialidade, ''),
+			COALESCE(foto_url, ''),
+			status
 		FROM profissionais
 		WHERE salao_id = ?
+			AND id = ?
 			AND status = 'ativo'
 			AND deleted_at IS NULL
-		ORDER BY nome ASC
-	`
-
-	rows, err := r.db.QueryContext(
-		ctx,
-		query,
-		salaoID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	profissionais := make([]Profissional, 0)
-
-	for rows.Next() {
-		var profissional Profissional
-
-		if err := rows.Scan(
-			&profissional.ID,
-			&profissional.Nome,
-			&profissional.Especialidade,
-			&profissional.FotoURL,
-		); err != nil {
-			return nil, err
-		}
-
-		profissionais = append(
-			profissionais,
-			profissional,
-		)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return profissionais, nil
-}
-
-// BuscarProximoAgendamento devolve o primeiro agendamento ativo
-// (pendente/confirmado) do cliente que ainda não terminou.
-// "agora" vem do Go em horário de Brasília (não usa NOW() do MySQL,
-// que pode estar em UTC). Retorna nil se não houver.
-func (r *Repository) BuscarProximoAgendamento(
-	ctx context.Context,
-	salaoID int64,
-	authUserID int64,
-	agora time.Time,
-) (*ProximoAgendamento, error) {
-	const query = `
-		SELECT
-			a.id,
-			DATE_FORMAT(a.inicio, '%Y-%m-%d %H:%i:%s'),
-			DATE_FORMAT(a.fim,    '%Y-%m-%d %H:%i:%s'),
-			a.status,
-			p.nome
-		FROM agendamentos a
-		INNER JOIN profissionais p
-			ON p.id = a.profissional_id
-		WHERE a.salao_id = ?
-			AND a.auth_user_id = ?
-			AND a.status IN ('pendente', 'confirmado')
-			AND a.fim > ?
-		ORDER BY a.inicio ASC, a.id ASC
 		LIMIT 1
 	`
 
-	var (
-		agendamento ProximoAgendamento
-		inicio      string
-		fim         string
-	)
+	var profissional Profissional
+	var status string
 
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
-		salaoID,
-		authUserID,
-		agora.Format(layoutDataHora),
+		idSalao,
+		profissionalID,
 	).Scan(
-		&agendamento.ID,
-		&inicio,
-		&fim,
-		&agendamento.Status,
-		&agendamento.Profissional,
+		&profissional.ID,
+		&profissional.IDSalao,
+		&profissional.Nome,
+		&profissional.Especialidade,
+		&profissional.Img,
+		&status,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, ErrUsuarioNaoEncontrado
 	}
-
 	if err != nil {
 		return nil, err
 	}
 
-	agendamento.Data = inicio[:10]
-	agendamento.Hora = inicio[11:16]
-	agendamento.HoraFim = fim[11:16]
-	agendamento.Servicos = []string{}
+	profissional.Ativo = status == "ativo"
+	return &profissional, nil
+}
 
-	const servicosQuery = `
-		SELECT
-			nome_servico_snapshot,
-			preco_unitario,
-			duracao_minutos,
-			quantidade
-		FROM servico_por_agendamento
-		WHERE agendamento_id = ?
-		ORDER BY id ASC
-	`
-
-	rows, err := r.db.QueryContext(
-		ctx,
-		servicosQuery,
-		agendamento.ID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			nome       string
-			preco      float64
-			duracao    int
-			quantidade int
-		)
-
-		if err := rows.Scan(
-			&nome,
-			&preco,
-			&duracao,
-			&quantidade,
-		); err != nil {
-			return nil, err
-		}
-
-		agendamento.Servicos = append(agendamento.Servicos, nome)
-		agendamento.DuracaoTotal += duracao * quantidade
-		agendamento.PrecoTotal += preco * float64(quantidade)
+// ConverterIDAuth converte um ID recebido do AUTH externo.
+func ConverterIDAuth(id string) (int64, error) {
+	idConvertido, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || idConvertido <= 0 {
+		return 0, errors.New("ID do usuário AUTH inválido")
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return &agendamento, nil
+	return idConvertido, nil
 }

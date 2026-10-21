@@ -17,7 +17,6 @@ func RegisterRoutes(
 		"POST /auth/cliente/verificar",
 		handler.Verificar,
 	)
-
 	mux.HandleFunc(
 		"POST /auth/cliente/adicionar",
 		handler.Adicionar,
