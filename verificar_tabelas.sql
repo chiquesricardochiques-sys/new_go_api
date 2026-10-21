@@ -1,0 +1,12 @@
+﻿SELECT
+    TABLE_NAME,
+    COLUMN_NAME,
+    COLUMN_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'salao_db'
+  AND TABLE_NAME IN (
+      'salao_admins',
+      'saloes',
+      'profissionais'
+  )
+ORDER BY TABLE_NAME, ORDINAL_POSITION;
