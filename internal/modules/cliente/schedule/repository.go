@@ -8,403 +8,706 @@ import (
 	"time"
 )
 
+var (
+	ErrSalaoNaoEncontrado        = errors.New("salão não encontrado")
+	ErrProfissionalNaoEncontrado = errors.New("profissional não encontrado")
+	ErrClienteNaoEncontrado      = errors.New("cliente não encontrado")
+	ErrServicoNaoEncontrado      = errors.New("serviço não encontrado")
+	ErrGradeNaoEncontrada        = errors.New("grade não encontrada")
+	ErrDiaBloqueado              = errors.New("dia bloqueado")
+	ErrHorarioBloqueado          = errors.New("horário bloqueado")
+	ErrHorarioIndisponivel       = errors.New("horário indisponível")
+	ErrDataInvalida              = errors.New("data inválida")
+	ErrHoraInvalida              = errors.New("hora inválida")
+	ErrDadosInvalidos            = errors.New("dados inválidos")
+	ErrProfissionalSemHorarios   = errors.New("profissional não trabalha com horários")
+)
+
+// Formato de data e hora gravado no banco (horário local, sem fuso).
+// Datas e horas vão e voltam como texto para não depender do fuso da conexão.
 const layoutDataHora = "2006-01-02 15:04:05"
-
-// Datas/horas vão e voltam do banco como texto "YYYY-MM-DD HH:MM:SS"
-// (horário de parede). Assim não depende de parseTime/loc do DSN.
-func dataHoraSQL(t time.Time) string {
-	return t.Format(layoutDataHora)
-}
-
-func parseDataHora(s string) (time.Time, error) {
-	return time.ParseInLocation(layoutDataHora, s, localBR)
-}
 
 type Repository struct {
 	db *sql.DB
 }
 
 func NewRepository(db *sql.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{
+		db: db,
+	}
 }
 
-func (r *Repository) VerificarSalao(ctx context.Context, salaoID int64) error {
-	const query = `SELECT id FROM saloes WHERE id = ? AND status = 'ativo' LIMIT 1`
+func (r *Repository) VerificarSalao(
+	ctx context.Context,
+	salaoID int64,
+) error {
+	const query = `
+		SELECT id
+		FROM saloes
+		WHERE id = ?
+		  AND status = 'ativo'
+		LIMIT 1
+	`
 
 	var id int64
-	err := r.db.QueryRowContext(ctx, query, salaoID).Scan(&id)
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		salaoID,
+	).Scan(&id)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSalaoNaoEncontrado
 	}
+
 	return err
 }
 
-func (r *Repository) BuscarTextos(ctx context.Context, salaoID int64) (map[string]string, error) {
+func (r *Repository) BuscarTextos(
+	ctx context.Context,
+	salaoID int64,
+) (map[string]string, error) {
 	const query = `
 		SELECT chave, conteudo
 		FROM textos_salao
 		WHERE salao_id = ?
-		ORDER BY chave ASC`
+		ORDER BY chave ASC
+	`
 
-	rows, err := r.db.QueryContext(ctx, query, salaoID)
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		salaoID,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	textos := make(map[string]string)
+
 	for rows.Next() {
-		var chave, conteudo string
-		if err := rows.Scan(&chave, &conteudo); err != nil {
+		var chave string
+		var conteudo string
+
+		if err := rows.Scan(
+			&chave,
+			&conteudo,
+		); err != nil {
 			return nil, err
 		}
+
 		textos[chave] = conteudo
 	}
-	return textos, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return textos, nil
 }
 
-func (r *Repository) BuscarServicos(ctx context.Context, salaoID int64) ([]Servico, error) {
+// BuscarServicos lista todos os serviços ativos do salão.
+// A tela de agendamento usa BuscarServicosDoProfissional.
+func (r *Repository) BuscarServicos(
+	ctx context.Context,
+	salaoID int64,
+) ([]Servico, error) {
 	const query = `
-		SELECT s.id, s.nome, s.descricao, ss.preco, ss.duracao_minutos
+		SELECT
+			s.id,
+			s.nome,
+			s.descricao,
+			s.img,
+			ss.preco,
+			ss.duracao_minutos
 		FROM salao_servicos ss
-		INNER JOIN servicos s ON s.id = ss.servico_id
+		INNER JOIN servicos s
+			ON s.id = ss.servico_id
 		WHERE ss.salao_id = ?
 		  AND ss.status = 'ativo'
 		  AND s.status = 'ativo'
-		ORDER BY s.nome ASC`
+		ORDER BY s.nome ASC
+	`
 
-	rows, err := r.db.QueryContext(ctx, query, salaoID)
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		salaoID,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	servicos := make([]Servico, 0)
+
 	for rows.Next() {
-		var s Servico
-		if err := rows.Scan(&s.ID, &s.Nome, &s.Descricao, &s.Preco, &s.DuracaoMinutos); err != nil {
+		var servico Servico
+
+		if err := rows.Scan(
+			&servico.ID,
+			&servico.Nome,
+			&servico.Descricao,
+			&servico.FotoURL,
+			&servico.Preco,
+			&servico.DuracaoMinutos,
+		); err != nil {
 			return nil, err
 		}
-		servicos = append(servicos, s)
+
+		servicos = append(servicos, servico)
 	}
-	return servicos, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return servicos, nil
 }
 
-func (r *Repository) BuscarProfissionais(ctx context.Context, salaoID int64) ([]Profissional, error) {
+// BuscarServicosDoProfissional lista só os serviços que o profissional faz
+// (servico_profissional), com o preço e a duração do salão.
+func (r *Repository) BuscarServicosDoProfissional(
+	ctx context.Context,
+	salaoID int64,
+	profissionalID int64,
+) ([]Servico, error) {
 	const query = `
-		SELECT id, nome, especialidade, foto_url, usa_horarios
+		SELECT
+			s.id,
+			s.nome,
+			s.descricao,
+			s.img,
+			ss.preco,
+			ss.duracao_minutos
+		FROM servico_profissional sp
+		INNER JOIN salao_servicos ss
+			ON ss.servico_id = sp.servico_id
+		   AND ss.salao_id = sp.salao_id
+		   AND ss.status = 'ativo'
+		INNER JOIN servicos s
+			ON s.id = sp.servico_id
+		   AND s.status = 'ativo'
+		WHERE sp.salao_id = ?
+		  AND sp.profissional_id = ?
+		  AND sp.status = 'ativo'
+		ORDER BY s.nome ASC
+	`
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		salaoID,
+		profissionalID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	servicos := make([]Servico, 0)
+
+	for rows.Next() {
+		var servico Servico
+
+		if err := rows.Scan(
+			&servico.ID,
+			&servico.Nome,
+			&servico.Descricao,
+			&servico.FotoURL,
+			&servico.Preco,
+			&servico.DuracaoMinutos,
+		); err != nil {
+			return nil, err
+		}
+
+		servicos = append(servicos, servico)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return servicos, nil
+}
+
+func (r *Repository) BuscarProfissionais(
+	ctx context.Context,
+	salaoID int64,
+) ([]Profissional, error) {
+	const query = `
+		SELECT
+			id,
+			nome,
+			especialidade,
+			foto_url,
+			usa_horarios
 		FROM profissionais
 		WHERE salao_id = ?
 		  AND status = 'ativo'
 		  AND deleted_at IS NULL
-		ORDER BY nome ASC`
+		ORDER BY nome ASC
+	`
 
-	rows, err := r.db.QueryContext(ctx, query, salaoID)
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		salaoID,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	profissionais := make([]Profissional, 0)
+
 	for rows.Next() {
-		var p Profissional
+		var profissional Profissional
 		var usaHorarios int
-		if err := rows.Scan(&p.ID, &p.Nome, &p.Especialidade, &p.FotoURL, &usaHorarios); err != nil {
+
+		if err := rows.Scan(
+			&profissional.ID,
+			&profissional.Nome,
+			&profissional.Especialidade,
+			&profissional.FotoURL,
+			&usaHorarios,
+		); err != nil {
 			return nil, err
 		}
-		p.UsaHorarios = usaHorarios == 1
-		profissionais = append(profissionais, p)
+
+		profissional.UsaHorarios = usaHorarios == 1
+
+		profissionais = append(
+			profissionais,
+			profissional,
+		)
 	}
-	return profissionais, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return profissionais, nil
 }
 
-func (r *Repository) BuscarProfissional(ctx context.Context, salaoID, profissionalID int64) (*Profissional, error) {
+func (r *Repository) BuscarProfissional(
+	ctx context.Context,
+	salaoID int64,
+	profissionalID int64,
+) (*Profissional, error) {
 	const query = `
-		SELECT id, nome, especialidade, foto_url, usa_horarios
+		SELECT
+			id,
+			nome,
+			especialidade,
+			foto_url,
+			usa_horarios
 		FROM profissionais
 		WHERE id = ?
 		  AND salao_id = ?
 		  AND status = 'ativo'
 		  AND deleted_at IS NULL
-		LIMIT 1`
+		LIMIT 1
+	`
 
-	var p Profissional
+	var profissional Profissional
 	var usaHorarios int
-	err := r.db.QueryRowContext(ctx, query, profissionalID, salaoID).
-		Scan(&p.ID, &p.Nome, &p.Especialidade, &p.FotoURL, &usaHorarios)
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		profissionalID,
+		salaoID,
+	).Scan(
+		&profissional.ID,
+		&profissional.Nome,
+		&profissional.Especialidade,
+		&profissional.FotoURL,
+		&usaHorarios,
+	)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrProfissionalNaoEncontrado
 	}
+
 	if err != nil {
 		return nil, err
 	}
-	p.UsaHorarios = usaHorarios == 1
-	return &p, nil
+
+	profissional.UsaHorarios = usaHorarios == 1
+
+	return &profissional, nil
 }
 
-func (r *Repository) BuscarGrade(ctx context.Context, salaoID, profissionalID int64, diaSemana string) (*Grade, error) {
+func (r *Repository) BuscarGrade(
+	ctx context.Context,
+	salaoID int64,
+	profissionalID int64,
+	diaSemana string,
+) (*Grade, error) {
 	const query = `
-		SELECT abre, abertura, pausa_inicio, pausa_fim, fechamento
+		SELECT
+			abre,
+			abertura,
+			pausa_inicio,
+			pausa_fim,
+			fechamento
 		FROM profissional_grade_semanal
 		WHERE salao_id = ?
 		  AND profissional_id = ?
 		  AND dia_semana = ?
-		LIMIT 1`
+		LIMIT 1
+	`
 
-	var (
-		abre                  int
-		abertura, fechamento  sql.NullString
-		pausaInicio, pausaFim sql.NullString
+	var grade Grade
+	var abre int
+	var abertura string
+	var fechamento string
+	var pausaInicio sql.NullString
+	var pausaFim sql.NullString
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		salaoID,
+		profissionalID,
+		diaSemana,
+	).Scan(
+		&abre,
+		&abertura,
+		&pausaInicio,
+		&pausaFim,
+		&fechamento,
 	)
 
-	err := r.db.QueryRowContext(ctx, query, salaoID, profissionalID, diaSemana).
-		Scan(&abre, &abertura, &pausaInicio, &pausaFim, &fechamento)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrGradeNaoEncontrada
 	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	g := &Grade{Abre: abre == 1}
+	grade.Abre = abre == 1
+	grade.Abertura = abertura
+	grade.Fechamento = fechamento
 
-	// dia fechado: abertura/fechamento podem ser NULL
-	if !g.Abre || !abertura.Valid || !fechamento.Valid {
-		g.Abre = false
-		return g, nil
+	if pausaInicio.Valid {
+		valor := pausaInicio.String
+		grade.PausaInicio = &valor
 	}
 
-	g.Abertura = abertura.String
-	g.Fechamento = fechamento.String
-	if pausaInicio.Valid && pausaFim.Valid {
-		pi, pf := pausaInicio.String, pausaFim.String
-		g.PausaInicio, g.PausaFim = &pi, &pf
+	if pausaFim.Valid {
+		valor := pausaFim.String
+		grade.PausaFim = &valor
 	}
-	return g, nil
+
+	return &grade, nil
 }
 
-func (r *Repository) VerificarDiaBloqueado(ctx context.Context, profissionalID int64, data string) (bool, error) {
+func (r *Repository) VerificarDiaBloqueado(
+	ctx context.Context,
+	profissionalID int64,
+	data string,
+) (bool, error) {
 	const query = `
 		SELECT id
 		FROM profissional_dias_bloqueados
-		WHERE profissional_id = ? AND data = ?
-		LIMIT 1`
+		WHERE profissional_id = ?
+		  AND data = ?
+		LIMIT 1
+	`
 
 	var id int64
-	err := r.db.QueryRowContext(ctx, query, profissionalID, data).Scan(&id)
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		profissionalID,
+		data,
+	).Scan(&id)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return err == nil, err
+
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
-func (r *Repository) VerificarHorarioBloqueado(ctx context.Context, profissionalID int64, inicio, fim time.Time) (bool, error) {
+func (r *Repository) VerificarHorarioBloqueado(
+	ctx context.Context,
+	profissionalID int64,
+	inicio time.Time,
+	fim time.Time,
+) (bool, error) {
 	const query = `
 		SELECT id
 		FROM profissional_horarios_bloqueados
 		WHERE profissional_id = ?
 		  AND inicio < ?
 		  AND fim > ?
-		LIMIT 1`
+		LIMIT 1
+	`
 
 	var id int64
-	err := r.db.QueryRowContext(ctx, query, profissionalID, dataHoraSQL(fim), dataHoraSQL(inicio)).Scan(&id)
+
+	// Texto no horário local, igual ao que fica gravado no banco.
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		profissionalID,
+		fim.Format(layoutDataHora),
+		inicio.Format(layoutDataHora),
+	).Scan(&id)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return err == nil, err
-}
 
-// Bloqueios de horário que encostam no dia.
-func (r *Repository) BuscarBloqueiosDoDia(ctx context.Context, profissionalID int64, inicioDia, fimDia time.Time) ([]BloqueioHorario, error) {
-	const query = `
-		SELECT
-			DATE_FORMAT(inicio, '%Y-%m-%d %H:%i:%s'),
-			DATE_FORMAT(fim,    '%Y-%m-%d %H:%i:%s')
-		FROM profissional_horarios_bloqueados
-		WHERE profissional_id = ?
-		  AND inicio < ?
-		  AND fim > ?
-		ORDER BY inicio ASC`
-
-	rows, err := r.db.QueryContext(ctx, query, profissionalID, dataHoraSQL(fimDia), dataHoraSQL(inicioDia))
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	defer rows.Close()
 
-	bloqueios := make([]BloqueioHorario, 0)
-	for rows.Next() {
-		var ini, fim string
-		if err := rows.Scan(&ini, &fim); err != nil {
-			return nil, err
-		}
-		ti, err := parseDataHora(ini)
-		if err != nil {
-			return nil, err
-		}
-		tf, err := parseDataHora(fim)
-		if err != nil {
-			return nil, err
-		}
-		bloqueios = append(bloqueios, BloqueioHorario{Inicio: ti, Fim: tf})
-	}
-	return bloqueios, rows.Err()
+	return true, nil
 }
 
-// Agendamentos ativos (pendente/confirmado) do profissional no dia,
-// já com os nomes dos serviços de cada um.
-func (r *Repository) BuscarAgendamentosDoDia(ctx context.Context, salaoID, profissionalID int64, inicioDia, fimDia time.Time) ([]AgendamentoExistente, error) {
+// BuscarAgendamentosDoDia devolve os agendamentos ativos do profissional no dia,
+// como intervalos: Inicio = hora_marcada, Fim = hora_marcada + duracao_minutos.
+func (r *Repository) BuscarAgendamentosDoDia(
+	ctx context.Context,
+	salaoID int64,
+	profissionalID int64,
+	data string,
+) ([]AgendamentoExistente, error) {
 	const query = `
 		SELECT
 			a.id,
-			DATE_FORMAT(a.inicio, '%Y-%m-%d %H:%i:%s'),
-			DATE_FORMAT(a.fim,    '%Y-%m-%d %H:%i:%s'),
-			COALESCE(spa.nome_servico_snapshot, '')
+			DATE_FORMAT(a.hora_marcada, '%Y-%m-%d %H:%i:%s'),
+			a.duracao_minutos
 		FROM agendamentos a
-		LEFT JOIN servico_por_agendamento spa ON spa.agendamento_id = a.id
 		WHERE a.salao_id = ?
 		  AND a.profissional_id = ?
-		  AND a.status IN ('pendente', 'confirmado')
-		  AND a.inicio < ?
-		  AND a.fim > ?
-		ORDER BY a.inicio ASC, a.id ASC, spa.id ASC`
+		  AND a.hora_marcada >= ?
+		  AND a.hora_marcada < DATE_ADD(?, INTERVAL 1 DAY)
+		  AND a.status IN (
+		      'pendente',
+		      'confirmado'
+		  )
+		ORDER BY a.hora_marcada ASC
+	`
 
-	rows, err := r.db.QueryContext(ctx, query,
-		salaoID, profissionalID, dataHoraSQL(fimDia), dataHoraSQL(inicioDia))
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		salaoID,
+		profissionalID,
+		data,
+		data,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	defer rows.Close()
 
 	agendamentos := make([]AgendamentoExistente, 0)
-	indice := make(map[int64]int)
 
 	for rows.Next() {
-		var id int64
-		var ini, fim, servico string
-		if err := rows.Scan(&id, &ini, &fim, &servico); err != nil {
+		var (
+			item        AgendamentoExistente
+			horaMarcada string
+			duracao     int
+		)
+
+		if err := rows.Scan(
+			&item.ID,
+			&horaMarcada,
+			&duracao,
+		); err != nil {
 			return nil, err
 		}
 
-		pos, ok := indice[id]
-		if !ok {
-			ti, err := parseDataHora(ini)
-			if err != nil {
-				return nil, err
-			}
-			tf, err := parseDataHora(fim)
-			if err != nil {
-				return nil, err
-			}
-			agendamentos = append(agendamentos, AgendamentoExistente{ID: id, Inicio: ti, Fim: tf})
-			pos = len(agendamentos) - 1
-			indice[id] = pos
+		inicio, err := time.ParseInLocation(
+			layoutDataHora,
+			horaMarcada,
+			time.Local,
+		)
+		if err != nil {
+			return nil, err
 		}
-		if servico != "" {
-			agendamentos[pos].Servicos = append(agendamentos[pos].Servicos, servico)
-		}
+
+		item.Inicio = inicio
+		item.Fim = inicio.Add(
+			time.Duration(duracao) * time.Minute,
+		)
+
+		agendamentos = append(
+			agendamentos,
+			item,
+		)
 	}
-	return agendamentos, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return agendamentos, nil
 }
 
-// O cliente é identificado pelo auth_user_id (vem da sessão no front).
-func (r *Repository) VerificarCliente(ctx context.Context, authUserID int64) error {
-	const query = `SELECT id FROM clientes_auth_vinculos WHERE auth_user_id = ? LIMIT 1`
+func (r *Repository) BuscarClienteAuthUserID(
+	ctx context.Context,
+	idCliente int64,
+) (int64, error) {
+	const query = `
+		SELECT auth_user_id
+		FROM clientes_auth_vinculos
+		WHERE id = ?
+		LIMIT 1
+	`
 
-	var id int64
-	err := r.db.QueryRowContext(ctx, query, authUserID).Scan(&id)
+	var authUserID int64
+
+	err := r.db.QueryRowContext(
+		ctx,
+		query,
+		idCliente,
+	).Scan(&authUserID)
+
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrClienteNaoEncontrado
+		return 0, ErrClienteNaoEncontrado
 	}
-	return err
+
+	if err != nil {
+		return 0, err
+	}
+
+	return authUserID, nil
 }
 
-// Serviços do salão que esse profissional realmente atende.
-// Retorna erro se algum ID não for válido.
-func (r *Repository) BuscarServicosSelecionados(ctx context.Context, salaoID, profissionalID int64, servicoIDs []int64) ([]Servico, int, error) {
-	// remove IDs repetidos
-	vistos := make(map[int64]bool, len(servicoIDs))
-	ids := make([]int64, 0, len(servicoIDs))
-	for _, id := range servicoIDs {
-		if id <= 0 {
-			return nil, 0, ErrServicoNaoEncontrado
-		}
-		if !vistos[id] {
-			vistos[id] = true
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
+func (r *Repository) BuscarServicosSelecionados(
+	ctx context.Context,
+	salaoID int64,
+	profissionalID int64,
+	servicoIDs []int64,
+) ([]Servico, int, error) {
+	if len(servicoIDs) == 0 {
 		return nil, 0, ErrServicoNaoEncontrado
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	placeholders := make([]string, 0, len(servicoIDs))
+	args := make([]any, 0, len(servicoIDs)+3)
+
+	// A ordem dos argumentos segue a ordem dos "?" da query:
+	// 1) profissional, 2) salão (servico_profissional), 3) ids, 4) salão (salao_servicos)
+	args = append(args, profissionalID, salaoID)
+
+	for _, id := range servicoIDs {
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+
+	args = append(args, salaoID)
 
 	query := `
-		SELECT s.id, s.nome, s.descricao, ss.preco, ss.duracao_minutos
+		SELECT
+			s.id,
+			s.nome,
+			s.descricao,
+			ss.preco,
+			ss.duracao_minutos
 		FROM salao_servicos ss
-		INNER JOIN servicos s ON s.id = ss.servico_id
+		INNER JOIN servicos s
+			ON s.id = ss.servico_id
 		INNER JOIN servico_profissional sp
 			ON sp.servico_id = ss.servico_id
 		   AND sp.profissional_id = ?
 		   AND sp.salao_id = ?
 		   AND sp.status = 'ativo'
-		WHERE ss.salao_id = ?
+		WHERE ss.servico_id IN (` + strings.Join(placeholders, ",") + `)
+		  AND ss.salao_id = ?
 		  AND ss.status = 'ativo'
 		  AND s.status = 'ativo'
-		  AND ss.servico_id IN (` + placeholders + `)
-		ORDER BY s.nome ASC`
+		ORDER BY s.nome ASC
+	`
 
-	args := make([]any, 0, len(ids)+3)
-	args = append(args, profissionalID, salaoID, salaoID)
-	for _, id := range ids {
-		args = append(args, id)
-	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		args...,
+	)
 	if err != nil {
 		return nil, 0, err
 	}
+
 	defer rows.Close()
 
-	servicos := make([]Servico, 0, len(ids))
+	servicos := make([]Servico, 0)
 	duracaoTotal := 0
+
 	for rows.Next() {
-		var s Servico
-		if err := rows.Scan(&s.ID, &s.Nome, &s.Descricao, &s.Preco, &s.DuracaoMinutos); err != nil {
+		var servico Servico
+
+		if err := rows.Scan(
+			&servico.ID,
+			&servico.Nome,
+			&servico.Descricao,
+			&servico.Preco,
+			&servico.DuracaoMinutos,
+		); err != nil {
 			return nil, 0, err
 		}
-		servicos = append(servicos, s)
-		duracaoTotal += s.DuracaoMinutos
+
+		servicos = append(
+			servicos,
+			servico,
+		)
+
+		duracaoTotal += servico.DuracaoMinutos
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
 	}
 
-	if len(servicos) != len(ids) {
+	if len(servicos) != len(servicoIDs) {
 		return nil, 0, ErrServicoNaoEncontrado
 	}
+
 	return servicos, duracaoTotal, nil
 }
 
-// CriarAgendamento faz a checagem final de "já tem gente nesse horário"
-// DENTRO da transação. Trava a linha do profissional pra duas requisições
-// simultâneas não passarem juntas pela checagem.
 func (r *Repository) CriarAgendamento(
 	ctx context.Context,
 	req AgendarRequest,
+	authUserID int64,
 	servicos []Servico,
-	inicio, fim time.Time,
+	horaMarcada time.Time,
+	duracaoMinutos int,
 ) (int64, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+	tx, err := r.db.BeginTx(
+		ctx,
+		&sql.TxOptions{},
+	)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = tx.Rollback() }()
 
-	// 1. trava o profissional (serializa agendamentos dele)
-	const lockQuery = `
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	// Confere novamente o profissional dentro da transação.
+	const profissionalQuery = `
 		SELECT id
 		FROM profissionais
 		WHERE id = ?
@@ -412,47 +715,113 @@ func (r *Repository) CriarAgendamento(
 		  AND status = 'ativo'
 		  AND deleted_at IS NULL
 		LIMIT 1
-		FOR UPDATE`
+	`
 
 	var profissionalID int64
-	err = tx.QueryRowContext(ctx, lockQuery, req.ProfissionalID, req.SalaoID).Scan(&profissionalID)
+
+	err = tx.QueryRowContext(
+		ctx,
+		profissionalQuery,
+		req.ProfissionalID,
+		req.SalaoID,
+	).Scan(&profissionalID)
+
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrProfissionalNaoEncontrado
 	}
+
 	if err != nil {
 		return 0, err
 	}
 
-	// 2. já existe agendamento ativo sobrepondo esse intervalo?
+	// Horário marcado e fim calculado, como texto (sem conversão de fuso).
+	inicioTexto := horaMarcada.Format(layoutDataHora)
+
+	fimTexto := horaMarcada.
+		Add(time.Duration(duracaoMinutos) * time.Minute).
+		Format(layoutDataHora)
+
+	// Conflito real de intervalo:
+	// existente = [hora_marcada, hora_marcada + duracao_minutos)
 	const conflitoQuery = `
 		SELECT id
 		FROM agendamentos
 		WHERE salao_id = ?
 		  AND profissional_id = ?
-		  AND status IN ('pendente', 'confirmado')
-		  AND inicio < ?
-		  AND fim > ?
-		LIMIT 1`
+		  AND status IN (
+		      'pendente',
+		      'confirmado'
+		  )
+		  AND hora_marcada < ?
+		  AND DATE_ADD(hora_marcada, INTERVAL duracao_minutos MINUTE) > ?
+		LIMIT 1
+		FOR UPDATE
+	`
 
 	var conflitoID int64
-	err = tx.QueryRowContext(ctx, conflitoQuery,
-		req.SalaoID, req.ProfissionalID, dataHoraSQL(fim), dataHoraSQL(inicio)).Scan(&conflitoID)
+
+	err = tx.QueryRowContext(
+		ctx,
+		conflitoQuery,
+		req.SalaoID,
+		req.ProfissionalID,
+		fimTexto,
+		inicioTexto,
+	).Scan(&conflitoID)
+
 	if err == nil {
 		return 0, ErrHorarioIndisponivel
 	}
+
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
 
-	// 3. cria o agendamento
-	const insertQuery = `
-		INSERT INTO agendamentos
-			(salao_id, profissional_id, auth_user_id, inicio, fim, status, observacao)
-		VALUES (?, ?, ?, ?, ?, 'pendente', ?)`
+	observacao := req.Observacao
 
-	result, err := tx.ExecContext(ctx, insertQuery,
-		req.SalaoID, req.ProfissionalID, req.AuthUserID,
-		dataHoraSQL(inicio), dataHoraSQL(fim), req.Observacao)
+	// hora_marcada    = data e hora escolhidas pelo cliente
+	// duracao_minutos = soma da duração dos serviços escolhidos
+	//
+	// inicio/fim ainda são NOT NULL e outros módulos (agenda do profissional,
+	// meus agendamentos, histórico) ainda leem essas colunas: por enquanto
+	// recebem o mesmo intervalo, como espelho.
+	const insertQuery = `
+		INSERT INTO agendamentos (
+			salao_id,
+			profissional_id,
+			auth_user_id,
+			hora_marcada,
+			duracao_minutos,
+			inicio,
+			fim,
+			status,
+			observacao
+		)
+		VALUES (
+			?,
+			?,
+			?,
+			?,
+			?,
+			?,
+			?,
+			'pendente',
+			?
+		)
+	`
+
+	result, err := tx.ExecContext(
+		ctx,
+		insertQuery,
+		req.SalaoID,
+		req.ProfissionalID,
+		authUserID,
+		inicioTexto,
+		duracaoMinutos,
+		inicioTexto,
+		fimTexto,
+		observacao,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -462,15 +831,37 @@ func (r *Repository) CriarAgendamento(
 		return 0, err
 	}
 
-	// 4. snapshot dos serviços
 	const snapshotQuery = `
-		INSERT INTO servico_por_agendamento
-			(agendamento_id, servico_id, nome_servico_snapshot, preco_unitario, duracao_minutos, quantidade)
-		VALUES (?, ?, ?, ?, ?, 1)`
+		INSERT INTO servico_por_agendamento (
+			agendamento_id,
+			servico_id,
+			nome_servico_snapshot,
+			preco_unitario,
+			duracao_minutos,
+			quantidade
+		)
+		VALUES (
+			?,
+			?,
+			?,
+			?,
+			?,
+			1
+		)
+	`
 
-	for _, s := range servicos {
-		if _, err := tx.ExecContext(ctx, snapshotQuery,
-			agendamentoID, s.ID, s.Nome, s.Preco, s.DuracaoMinutos); err != nil {
+	for _, servico := range servicos {
+		_, err = tx.ExecContext(
+			ctx,
+			snapshotQuery,
+			agendamentoID,
+			servico.ID,
+			servico.Nome,
+			servico.Preco,
+			servico.DuracaoMinutos,
+		)
+
+		if err != nil {
 			return 0, err
 		}
 	}
@@ -478,5 +869,6 @@ func (r *Repository) CriarAgendamento(
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+
 	return agendamentoID, nil
 }

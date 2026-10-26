@@ -2,10 +2,15 @@ package schedule
 
 import "time"
 
+// ============================================================
+// REQUESTS
+// ============================================================
+
+// SchedulePageRequest: profissional_id e data são opcionais.
 type SchedulePageRequest struct {
 	SalaoID        int64  `json:"salao_id"`
-	ProfissionalID int64  `json:"profissional_id"` // opcional
-	Data           string `json:"data"`            // opcional (YYYY-MM-DD)
+	ProfissionalID int64  `json:"profissional_id"` // 0 = o primeiro da lista
+	Data           string `json:"data"`            // vazio = hoje
 }
 
 type HorariosDisponiveisRequest struct {
@@ -14,23 +19,28 @@ type HorariosDisponiveisRequest struct {
 	Data           string `json:"data"`
 }
 
+type ServicosProfissionalRequest struct {
+	SalaoID        int64 `json:"salao_id"`
+	ProfissionalID int64 `json:"profissional_id"`
+}
+
 type AgendarRequest struct {
 	SalaoID        int64   `json:"salao_id"`
-	AuthUserID     int64   `json:"auth_user_id"`
+	IDCliente      int64   `json:"id_cliente"`
 	ServicoIDs     []int64 `json:"servico_ids"`
 	ProfissionalID int64   `json:"profissional_id"`
 	Data           string  `json:"data"`
 	Hora           string  `json:"hora"`
-	Observacao     *string `json:"observacoes"` // o front manda "observacoes"
+	Observacao     *string `json:"observacao"`
 }
 
-// Horario é um slot da grade do profissional.
-// Disponivel=false quando já existe agendamento (Motivo="agendado")
-// ou bloqueio do profissional (Motivo="bloqueado").
+// ============================================================
+// ENTIDADES
+// ============================================================
+
 type Horario struct {
 	Hora          string   `json:"hora"`
 	Disponivel    bool     `json:"disponivel"`
-	Motivo        string   `json:"motivo,omitempty"`
 	AgendamentoID *int64   `json:"agendamento,omitempty"`
 	Servicos      []string `json:"servicos,omitempty"`
 }
@@ -39,6 +49,7 @@ type Servico struct {
 	ID             int64   `json:"id"`
 	Nome           string  `json:"nome"`
 	Descricao      *string `json:"descricao"`
+	FotoURL        *string `json:"foto_url"` // coluna servicos.img
 	Preco          float64 `json:"preco"`
 	DuracaoMinutos int     `json:"duracao_minutos"`
 }
@@ -50,6 +61,10 @@ type Profissional struct {
 	FotoURL       *string `json:"foto_url"`
 	UsaHorarios   bool    `json:"usa_horarios"`
 }
+
+// ============================================================
+// RESPONSES
+// ============================================================
 
 type ScheduleData struct {
 	Textos               map[string]string `json:"textos"`
@@ -83,6 +98,10 @@ type AgendarResponse struct {
 	} `json:"data,omitempty"`
 }
 
+// ============================================================
+// TIPOS INTERNOS
+// ============================================================
+
 type Grade struct {
 	Abre        bool
 	Abertura    string
@@ -91,14 +110,11 @@ type Grade struct {
 	Fechamento  string
 }
 
+// AgendamentoExistente é um agendamento ativo visto como intervalo:
+// Inicio = hora_marcada, Fim = hora_marcada + duracao_minutos.
 type AgendamentoExistente struct {
 	ID       int64
 	Inicio   time.Time
 	Fim      time.Time
 	Servicos []string
-}
-
-type BloqueioHorario struct {
-	Inicio time.Time
-	Fim    time.Time
 }

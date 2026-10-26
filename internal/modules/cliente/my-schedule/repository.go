@@ -3,8 +3,8 @@ package myschedule
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"time"
+	"fmt"
 )
 
 const layoutDataHora = "2006-01-02 15:04:05"
@@ -53,11 +53,12 @@ func (r *Repository) ListarAgendamentos(
 	cenario, status string,
 	inicioHoje time.Time,
 ) ([]Agendamento, error) {
+
 	query := `
 		SELECT
 			a.id,
-			DATE_FORMAT(a.inicio, '%Y-%m-%d %H:%i:%s'),
-			DATE_FORMAT(a.fim,    '%Y-%m-%d %H:%i:%s'),
+			DATE_FORMAT(a.hora_marcada, '%Y-%m-%d %H:%i:%s'),
+			a.duracao_minutos,
 			a.status,
 			a.observacao,
 			p.nome,
@@ -66,28 +67,58 @@ func (r *Repository) ListarAgendamentos(
 			COALESCE(spa.duracao_minutos, 0),
 			COALESCE(spa.quantidade, 1)
 		FROM agendamentos a
-		INNER JOIN profissionais p ON p.id = a.profissional_id
-		LEFT JOIN servico_por_agendamento spa ON spa.agendamento_id = a.id
+		INNER JOIN profissionais p
+			ON p.id = a.profissional_id
+		LEFT JOIN servico_por_agendamento spa
+			ON spa.agendamento_id = a.id
 		WHERE a.salao_id = ?
 		  AND a.auth_user_id = ?`
 
-	args := []any{salaoID, authUserID}
+	args := []any{
+		salaoID,
+		authUserID,
+	}
+
 	hoje := inicioHoje.Format(layoutDataHora)
 
 	var ordem string
 
 	switch cenario {
+
 	case CenarioHistorico:
 		query += `
-		  AND (a.inicio < ? OR a.status IN ('concluido', 'cancelado', 'nao_compareceu'))`
+		  AND (
+				a.hora_marcada < ?
+				OR a.status IN (
+					'concluido',
+					'cancelado',
+					'nao_compareceu'
+				)
+		  )`
+
 		args = append(args, hoje)
-		ordem = ` ORDER BY a.inicio DESC, a.id DESC, spa.id ASC`
-	default: // meus_agendamentos
+
+		ordem = `
+			ORDER BY
+				a.hora_marcada DESC,
+				a.id DESC,
+				spa.id ASC`
+
+	default:
 		query += `
-		  AND a.inicio >= ?
-		  AND a.status IN ('pendente', 'confirmado')`
+		  AND a.hora_marcada >= ?
+		  AND a.status IN (
+				'pendente',
+				'confirmado'
+		  )`
+
 		args = append(args, hoje)
-		ordem = ` ORDER BY a.inicio ASC, a.id ASC, spa.id ASC`
+
+		ordem = `
+			ORDER BY
+				a.hora_marcada ASC,
+				a.id ASC,
+				spa.id ASC`
 	}
 
 	if status != "" {
@@ -97,19 +128,26 @@ func (r *Repository) ListarAgendamentos(
 
 	query += ordem
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		args...,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	agendamentos := make([]Agendamento, 0)
+
 	indice := make(map[int64]int)
 
 	for rows.Next() {
+
 		var (
 			id                int64
-			inicioStr, fimStr string
+			inicioStr         string
+			duracaoMinutos    int
 			st                string
 			observacao        sql.NullString
 			profissional      string
@@ -120,52 +158,100 @@ func (r *Repository) ListarAgendamentos(
 		)
 
 		if err := rows.Scan(
-			&id, &inicioStr, &fimStr, &st, &observacao, &profissional,
-			&servicoNome, &servicoPreco, &servicoDuracao, &servicoQuantidade,
+			&id,
+			&inicioStr,
+			&duracaoMinutos,
+			&st,
+			&observacao,
+			&profissional,
+			&servicoNome,
+			&servicoPreco,
+			&servicoDuracao,
+			&servicoQuantidade,
 		); err != nil {
 			return nil, err
 		}
 
 		pos, ok := indice[id]
+
 		if !ok {
-			inicio, err := time.ParseInLocation(layoutDataHora, inicioStr, localBR)
+
+			inicio, err := time.ParseInLocation(
+				layoutDataHora,
+				inicioStr,
+				localBR,
+			)
 			if err != nil {
 				return nil, err
 			}
 
+			/*
+				Importante:
+
+				hora_marcada = início real do agendamento
+				duracao_minutos = duração real
+
+				O fim é calculado aqui.
+			*/
+			fim := inicio.Add(
+				time.Duration(duracaoMinutos) * time.Minute,
+			)
+
 			ag := Agendamento{
 				ID:           id,
-				Data:         inicioStr[:10],
-				Hora:         inicioStr[11:16],
-				HoraFim:      fimStr[11:16],
+				Data:         inicio.Format("2006-01-02"),
+				Hora:         inicio.Format("15:04"),
+				HoraFim:      fim.Format("15:04"),
 				Status:       st,
 				Profissional: profissional,
 				Servicos:     []ServicoAgendado{},
 				Inicio:       inicio,
 			}
+
 			if observacao.Valid {
 				obs := observacao.String
 				ag.Observacoes = &obs
 			}
 
-			agendamentos = append(agendamentos, ag)
+			agendamentos = append(
+				agendamentos,
+				ag,
+			)
+
 			pos = len(agendamentos) - 1
+
 			indice[id] = pos
 		}
 
+		/*
+			Os serviços continuam vindo do snapshot
+			do momento em que o agendamento foi criado.
+		*/
 		if servicoNome != "" {
-			agendamentos[pos].Servicos = append(agendamentos[pos].Servicos, ServicoAgendado{
-				Nome:       servicoNome,
-				Preco:      servicoPreco,
-				DuracaoMin: servicoDuracao,
-				Quantidade: servicoQuantidade,
-			})
-			agendamentos[pos].DuracaoTotal += servicoDuracao * servicoQuantidade
-			agendamentos[pos].PrecoTotal += servicoPreco * float64(servicoQuantidade)
+
+			agendamentos[pos].Servicos = append(
+				agendamentos[pos].Servicos,
+				ServicoAgendado{
+					Nome:       servicoNome,
+					Preco:      servicoPreco,
+					DuracaoMin: servicoDuracao,
+					Quantidade: servicoQuantidade,
+				},
+			)
+
+			agendamentos[pos].DuracaoTotal +=
+				servicoDuracao * servicoQuantidade
+
+			agendamentos[pos].PrecoTotal +=
+				servicoPreco * float64(servicoQuantidade)
 		}
 	}
 
-	return agendamentos, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return agendamentos, nil
 }
 
 // CancelarAgendamento muda o status para 'cancelado' (não apaga a linha).
@@ -176,14 +262,23 @@ func (r *Repository) CancelarAgendamento(
 	salaoID, authUserID, agendamentoID int64,
 	agora time.Time,
 ) error {
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	const selectQuery = `
-		SELECT status, DATE_FORMAT(inicio, '%Y-%m-%d %H:%i:%s')
+		SELECT
+			status,
+			DATE_FORMAT(
+				hora_marcada,
+				'%Y-%m-%d %H:%i:%s'
+			)
 		FROM agendamentos
 		WHERE id = ?
 		  AND salao_id = ?
@@ -191,40 +286,67 @@ func (r *Repository) CancelarAgendamento(
 		LIMIT 1
 		FOR UPDATE`
 
-	var status, inicioStr string
-	err = tx.QueryRowContext(ctx, selectQuery, agendamentoID, salaoID, authUserID).
-		Scan(&status, &inicioStr)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrAgendamentoNaoEncontrado
-	}
+	var (
+		status    string
+		inicioStr string
+	)
+
+	err = tx.QueryRowContext(
+		ctx,
+		selectQuery,
+		agendamentoID,
+		salaoID,
+		authUserID,
+	).Scan(
+		&status,
+		&inicioStr,
+	)
+
 	if err != nil {
 		return err
 	}
 
-	if status == "cancelado" {
-		return ErrJaCancelado
-	}
-	if status != "pendente" && status != "confirmado" {
-		return ErrNaoPodeCancelar
-	}
-
-	inicio, err := time.ParseInLocation(layoutDataHora, inicioStr, localBR)
+	inicio, err := time.ParseInLocation(
+		layoutDataHora,
+		inicioStr,
+		localBR,
+	)
 	if err != nil {
 		return err
 	}
+
+	if status != "pendente" &&
+		status != "confirmado" {
+		return fmt.Errorf("agendamento não pode ser cancelado")
+	}
+
 	if !inicio.After(agora) {
-		return ErrNaoPodeCancelar
+		return fmt.Errorf("agendamento não pode ser cancelado")
 	}
 
 	const updateQuery = `
 		UPDATE agendamentos
-		SET status = 'cancelado'
+		SET
+			status = 'cancelado',
+			updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-		  AND status IN ('pendente', 'confirmado')`
+		  AND salao_id = ?
+		  AND auth_user_id = ?`
 
-	if _, err := tx.ExecContext(ctx, updateQuery, agendamentoID); err != nil {
+	_, err = tx.ExecContext(
+		ctx,
+		updateQuery,
+		agendamentoID,
+		salaoID,
+		authUserID,
+	)
+	if err != nil {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
 }

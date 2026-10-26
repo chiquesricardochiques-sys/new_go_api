@@ -8,8 +8,10 @@ import (
 	"github.com/ricardo-platform/salao-usuarios-api/internal/http/middleware"
 
 	adminAdmins "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/admins"
+	adminConfProf "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/conf_prof"
 	adminDashboard "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/dashboard"
 	adminProfessionals "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/professionals"
+	addImg "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/addImg"
 	adminSalary "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/salary"
 	adminServices "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/services"
 	adminSalao "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/salao"
@@ -24,6 +26,9 @@ import (
 	clienteClientHome "github.com/ricardo-platform/salao-usuarios-api/internal/modules/cliente/client_home"
 	schedule "github.com/ricardo-platform/salao-usuarios-api/internal/modules/cliente/schedule"
 	mySchedule "github.com/ricardo-platform/salao-usuarios-api/internal/modules/cliente/my-schedule"
+	clienteDadosAgendamentos "github.com/ricardo-platform/salao-usuarios-api/internal/modules/cliente/dadosAgendamentos"
+	profissionalOps "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/operations"
+	controleStatus "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/controleStatus"
 )
 
 // NewRouter registra as rotas da API.
@@ -49,6 +54,11 @@ func NewRouter(db *sql.DB) http.Handler {
 		mux,
 		db,
 	)
+	// Adicionar, alterar e remover foto_url / foto_public_id.
+	addImg.RegisterRoutes(
+		mux,
+		db,
+	)
 
 	// =====================================================
 	// CLIENTES
@@ -64,6 +74,7 @@ func NewRouter(db *sql.DB) http.Handler {
 	clienteClientHome.RegisterRoutes(mux, db)
 	schedule.RegisterRoutes(mux, db)
 	mySchedule.RegisterRoutes(mux, db)
+	clienteDadosAgendamentos.RegisterRoutes(mux, db)
 
 	// =====================================================
 	// SAÚDE DA API
@@ -101,6 +112,15 @@ func NewRouter(db *sql.DB) http.Handler {
 	// =====================================================
 
 	adminProfessionals.RegisterRoutes(
+		mux,
+		db,
+	)
+
+	// =====================================================
+	// CONFIGURAÇÕES DOS PROFISSIONAIS
+	// =====================================================
+
+	adminConfProf.RegisterRoutes(
 		mux,
 		db,
 	)
@@ -152,12 +172,19 @@ func NewRouter(db *sql.DB) http.Handler {
 		mux,
 		db,
 	)
-
+	// rotas de estatus de cortes 
+	controleStatus.RegisterRoutes(mux, db)
 	// =====================================================
 	// SALÁRIOS E RENDIMENTOS
 	// =====================================================
 
 	adminSalary.RegisterRoutes(
+		mux,
+		db,
+	)
+
+	// Operações do app do profissional (agenda, status, resumo, histórico, horários, perfil, faturamento).
+	profissionalOps.RegisterRoutes(
 		mux,
 		db,
 	)
@@ -170,4 +197,6 @@ func NewRouter(db *sql.DB) http.Handler {
 	return middleware.CORS(
 		mux,
 	)
+
+
 }

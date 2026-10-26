@@ -5,74 +5,54 @@ import (
 	"errors"
 	"fmt"
 	"time"
-	_ "time/tzdata" // garante America/Sao_Paulo mesmo em container sem tzdata
+	"sort"
 )
-
-var (
-	ErrSalaoNaoEncontrado        = errors.New("salão não encontrado")
-	ErrProfissionalNaoEncontrado = errors.New("profissional não encontrado")
-	ErrClienteNaoEncontrado      = errors.New("cliente não encontrado")
-	ErrServicoNaoEncontrado      = errors.New("serviço não encontrado")
-	ErrGradeNaoEncontrada        = errors.New("grade não encontrada")
-	ErrDiaBloqueado              = errors.New("dia bloqueado")
-	ErrHorarioBloqueado          = errors.New("horário bloqueado")
-	ErrHorarioIndisponivel       = errors.New("horário indisponível")
-	ErrDataInvalida              = errors.New("data inválida")
-	ErrHoraInvalida              = errors.New("hora inválida")
-	ErrDadosInvalidos            = errors.New("dados inválidos")
-	ErrProfissionalSemHorarios   = errors.New("profissional não trabalha com horários")
-)
-
-// Cada slot da grade tem 30 minutos.
-const intervaloSlot = 30
-
-// Fuso do salão. O "hoje" e o "agora" são sempre em horário de Brasília
-// (o Node usava UTC e virava o dia às 21h).
-var localBR = func() *time.Location {
-	loc, err := time.LoadLocation("America/Sao_Paulo")
-	if err != nil {
-		return time.FixedZone("BRT", -3*60*60)
-	}
-	return loc
-}()
-
-func agoraBR() time.Time {
-	return time.Now().In(localBR)
-}
 
 type Service struct {
 	repository *Repository
 }
 
 func NewService(repository *Repository) *Service {
-	return &Service{repository: repository}
+	return &Service{
+		repository: repository,
+	}
 }
 
 func validarData(data string) (time.Time, error) {
 	if data == "" {
 		return time.Time{}, ErrDataInvalida
 	}
-	t, err := time.ParseInLocation("2006-01-02", data, localBR)
+
+	// A data é interpretada no fuso local do servidor, o mesmo usado
+	// para montar hora_marcada e para o "hoje" da tela.
+	dataParsed, err := time.ParseInLocation(
+		"2006-01-02",
+		data,
+		time.Local,
+	)
 	if err != nil {
 		return time.Time{}, ErrDataInvalida
 	}
-	return t, nil
+
+	return dataParsed, nil
 }
 
-// Aceita "15:04" e "15:04:05". Retorna minutos desde 00:00.
-func validarHora(hora string) (int, error) {
+func validarHora(hora string) (time.Time, error) {
 	if hora == "" {
-		return 0, ErrHoraInvalida
+		return time.Time{}, ErrHoraInvalida
 	}
-	t, err := time.Parse("15:04", hora)
+
+	horaParsed, err := time.Parse(
+		"15:04",
+		hora,
+	)
 	if err != nil {
-		t, err = time.Parse("15:04:05", hora)
-		if err != nil {
-			return 0, ErrHoraInvalida
-		}
+		return time.Time{}, ErrHoraInvalida
 	}
-	return t.Hour()*60 + t.Minute(), nil
+
+	return horaParsed, nil
 }
+
 
 func diaSemana(data time.Time) string {
 	switch data.Weekday() {
@@ -88,38 +68,240 @@ func diaSemana(data time.Time) string {
 		return "qui"
 	case time.Friday:
 		return "sex"
-	default:
+	case time.Saturday:
 		return "sab"
+	default:
+		return ""
 	}
 }
 
-// "08:00" ou "08:00:00" -> 480
 func horaParaMinutos(valor string) int {
 	if len(valor) < 5 {
 		return 0
 	}
-	return int(valor[0]-'0')*600 + int(valor[1]-'0')*60 +
-		int(valor[3]-'0')*10 + int(valor[4]-'0')
+
+	hora := int(valor[0]-'0')*10 +
+		int(valor[1]-'0')
+
+	minuto := int(valor[3]-'0')*10 +
+		int(valor[4]-'0')
+
+	return hora*60 + minuto
 }
 
 func minutosParaHora(minutos int) string {
-	return fmt.Sprintf("%02d:%02d", minutos/60, minutos%60)
+	hora := minutos / 60
+	minuto := minutos % 60
+
+	return fmt.Sprintf(
+		"%02d:%02d",
+		hora,
+		minuto,
+	)
 }
 
-func instante(dia time.Time, minutos int) time.Time {
-	return time.Date(dia.Year(), dia.Month(), dia.Day(), minutos/60, minutos%60, 0, 0, localBR)
+func intervaloSobrepoe(
+	inicio time.Time,
+	fim time.Time,
+	agendamento AgendamentoExistente,
+) bool {
+	return inicio.Before(agendamento.Fim) &&
+		fim.After(agendamento.Inicio)
 }
 
-func sobrepoe(aIni, aFim, bIni, bFim time.Time) bool {
-	return aIni.Before(bFim) && aFim.After(bIni)
-}
+// func (s *Service) BuscarHorarios(
+// 	ctx context.Context,
+// 	req HorariosDisponiveisRequest,
+// ) (int, []Horario, error) {
+// 	if req.SalaoID <= 0 ||
+// 		req.ProfissionalID <= 0 {
+// 		return 0, nil, ErrDadosInvalidos
+// 	}
 
-// ============================================================
-// HORÁRIOS DA GRADE (com os já agendados marcados)
-// ============================================================
+// 	data, err := validarData(req.Data)
+// 	if err != nil {
+// 		return 0, nil, err
+// 	}
 
-func (s *Service) BuscarHorarios(ctx context.Context, req HorariosDisponiveisRequest) (int, []Horario, error) {
-	if req.SalaoID <= 0 || req.ProfissionalID <= 0 {
+// 	profissional, err := s.repository.BuscarProfissional(
+// 		ctx,
+// 		req.SalaoID,
+// 		req.ProfissionalID,
+// 	)
+// 	if err != nil {
+// 		return 0, nil, err
+// 	}
+
+// 	if !profissional.UsaHorarios {
+// 		return 0, []Horario{}, nil
+// 	}
+
+// 	diaBloqueado, err :=
+// 		s.repository.VerificarDiaBloqueado(
+// 			ctx,
+// 			req.ProfissionalID,
+// 			req.Data,
+// 		)
+// 	if err != nil {
+// 		return 0, nil, err
+// 	}
+
+// 	if diaBloqueado {
+// 		return 1, []Horario{}, nil
+// 	}
+
+// 	grade, err := s.repository.BuscarGrade(
+// 		ctx,
+// 		req.SalaoID,
+// 		req.ProfissionalID,
+// 		diaSemana(data),
+// 	)
+
+// 	if errors.Is(err, ErrGradeNaoEncontrada) {
+// 		return 1, []Horario{}, nil
+// 	}
+
+// 	if err != nil {
+// 		return 0, nil, err
+// 	}
+
+// 	if !grade.Abre {
+// 		return 1, []Horario{}, nil
+// 	}
+
+// 	agendamentos, err :=
+// 		s.repository.BuscarAgendamentosDoDia(
+// 			ctx,
+// 			req.SalaoID,
+// 			req.ProfissionalID,
+// 			req.Data,
+// 		)
+// 	if err != nil {
+// 		return 0, nil, err
+// 	}
+
+// 	abertura := horaParaMinutos(
+// 		grade.Abertura,
+// 	)
+
+// 	fechamento := horaParaMinutos(
+// 		grade.Fechamento,
+// 	)
+
+// 	pausaInicio := -1
+// 	pausaFim := -1
+
+// 	if grade.PausaInicio != nil &&
+// 		grade.PausaFim != nil {
+// 		pausaInicio = horaParaMinutos(
+// 			*grade.PausaInicio,
+// 		)
+
+// 		pausaFim = horaParaMinutos(
+// 			*grade.PausaFim,
+// 		)
+// 	}
+
+// 	horarios := make([]Horario, 0)
+
+// 	for minuto := abertura; minuto < fechamento; minuto += 30 {
+// 		if pausaInicio >= 0 &&
+// 			pausaFim >= 0 &&
+// 			minuto >= pausaInicio &&
+// 			minuto < pausaFim {
+// 			continue
+// 		}
+
+// 		horarios = append(
+// 			horarios,
+// 			Horario{
+// 				Hora:       minutosParaHora(minuto),
+// 				Disponivel: true,
+// 				Servicos:   nil,
+// 			},
+// 		)
+// 	}
+
+// 	// Remove horários que já passaram quando a data é hoje.
+// 	agora := time.Now()
+
+// 	if data.Format("2006-01-02") ==
+// 		agora.Format("2006-01-02") {
+
+// 		minutoAtual :=
+// 			agora.Hour()*60 +
+// 				agora.Minute()
+
+// 		filtrados := make(
+// 			[]Horario,
+// 			0,
+// 			len(horarios),
+// 		)
+
+// 		for _, horario := range horarios {
+// 			minutoHorario :=
+// 				horaParaMinutos(horario.Hora)
+
+// 			if minutoHorario > minutoAtual {
+// 				filtrados = append(
+// 					filtrados,
+// 					horario,
+// 				)
+// 			}
+// 		}
+
+// 		horarios = filtrados
+// 	}
+
+// 	// Marca horários ocupados pelos agendamentos existentes
+// 	// (cada agendamento ocupa hora_marcada até hora_marcada + duracao_minutos).
+// 	for i := range horarios {
+// 		horarioMinutos :=
+// 			horaParaMinutos(
+// 				horarios[i].Hora,
+// 			)
+
+// 		inicio := time.Date(
+// 			data.Year(),
+// 			data.Month(),
+// 			data.Day(),
+// 			horarioMinutos/60,
+// 			horarioMinutos%60,
+// 			0,
+// 			0,
+// 			time.Local,
+// 		)
+
+// 		// Cada slot representa 30 minutos.
+// 		fim := inicio.Add(30 * time.Minute)
+
+// 		for _, agendamento :=
+// 			range agendamentos {
+
+// 			if intervaloSobrepoe(
+// 				inicio,
+// 				fim,
+// 				agendamento,
+// 			) {
+// 				horarios[i].Disponivel = false
+
+// 				id := agendamento.ID
+// 				horarios[i].AgendamentoID = &id
+
+// 				break
+// 			}
+// 		}
+// 	}
+
+// 	return 1, horarios, nil
+// }
+func (s *Service) BuscarHorarios(
+	ctx context.Context,
+	req HorariosDisponiveisRequest,
+) (int, []Horario, error) {
+
+	if req.SalaoID <= 0 ||
+		req.ProfissionalID <= 0 {
 		return 0, nil, ErrDadosInvalidos
 	}
 
@@ -128,7 +310,11 @@ func (s *Service) BuscarHorarios(ctx context.Context, req HorariosDisponiveisReq
 		return 0, nil, err
 	}
 
-	profissional, err := s.repository.BuscarProfissional(ctx, req.SalaoID, req.ProfissionalID)
+	profissional, err := s.repository.BuscarProfissional(
+		ctx,
+		req.SalaoID,
+		req.ProfissionalID,
+	)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -137,161 +323,378 @@ func (s *Service) BuscarHorarios(ctx context.Context, req HorariosDisponiveisReq
 		return 0, []Horario{}, nil
 	}
 
-	diaBloqueado, err := s.repository.VerificarDiaBloqueado(ctx, req.ProfissionalID, req.Data)
+	diaBloqueado, err :=
+		s.repository.VerificarDiaBloqueado(
+			ctx,
+			req.ProfissionalID,
+			req.Data,
+		)
 	if err != nil {
 		return 0, nil, err
 	}
+
 	if diaBloqueado {
 		return 1, []Horario{}, nil
 	}
 
-	grade, err := s.repository.BuscarGrade(ctx, req.SalaoID, req.ProfissionalID, diaSemana(data))
+	grade, err := s.repository.BuscarGrade(
+		ctx,
+		req.SalaoID,
+		req.ProfissionalID,
+		diaSemana(data),
+	)
+
 	if errors.Is(err, ErrGradeNaoEncontrada) {
 		return 1, []Horario{}, nil
 	}
+
 	if err != nil {
 		return 0, nil, err
 	}
+
 	if !grade.Abre {
 		return 1, []Horario{}, nil
 	}
 
-	inicioDia := data
-	fimDia := data.AddDate(0, 0, 1)
-
-	agendamentos, err := s.repository.BuscarAgendamentosDoDia(ctx, req.SalaoID, req.ProfissionalID, inicioDia, fimDia)
+	agendamentos, err :=
+		s.repository.BuscarAgendamentosDoDia(
+			ctx,
+			req.SalaoID,
+			req.ProfissionalID,
+			req.Data,
+		)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	bloqueios, err := s.repository.BuscarBloqueiosDoDia(ctx, req.ProfissionalID, inicioDia, fimDia)
-	if err != nil {
-		return 0, nil, err
+	abertura := horaParaMinutos(
+		grade.Abertura,
+	)
+
+	fechamento := horaParaMinutos(
+		grade.Fechamento,
+	)
+
+	pausaInicio := -1
+	pausaFim := -1
+
+	if grade.PausaInicio != nil &&
+		grade.PausaFim != nil {
+
+		pausaInicio = horaParaMinutos(
+			*grade.PausaInicio,
+		)
+
+		pausaFim = horaParaMinutos(
+			*grade.PausaFim,
+		)
 	}
 
-	abertura := horaParaMinutos(grade.Abertura)
-	fechamento := horaParaMinutos(grade.Fechamento)
+	// ============================================================
+	// MONTA OS PONTOS DE HORÁRIO
+	//
+	// Os 30 minutos continuam sendo a grade principal.
+	// Porém, o final de um agendamento também vira um ponto
+	// de horário disponível.
+	//
+	// Exemplo:
+	//
+	// 08:00 -> 08:40
+	//
+	// Grade:
+	// 08:00
+	// 08:30
+	// 09:00
+	//
+	// Autoajuste:
+	// 08:40
+	//
+	// Resultado:
+	// 08:00
+	// 08:30
+	// 08:40
+	// 09:00
+	// ============================================================
 
-	pausaInicio, pausaFim := -1, -1
-	if grade.PausaInicio != nil && grade.PausaFim != nil {
-		pausaInicio = horaParaMinutos(*grade.PausaInicio)
-		pausaFim = horaParaMinutos(*grade.PausaFim)
+	pontos := make(map[int]struct{})
+
+	// Grade normal de 30 em 30 minutos.
+	for minuto := abertura; minuto < fechamento; minuto += 30 {
+
+		if pausaInicio >= 0 &&
+			pausaFim >= 0 &&
+			minuto >= pausaInicio &&
+			minuto < pausaFim {
+			continue
+		}
+
+		pontos[minuto] = struct{}{}
 	}
 
-	// hoje: só mostra horários que ainda não passaram
-	agora := agoraBR()
-	ehHoje := data.Format("2006-01-02") == agora.Format("2006-01-02")
-	minutoAgora := agora.Hour()*60 + agora.Minute()
+	// Adiciona o final real dos agendamentos como novo ponto.
+	for _, agendamento := range agendamentos {
 
-	horarios := make([]Horario, 0)
+		minutoFim :=
+			agendamento.Fim.Hour()*60 +
+				agendamento.Fim.Minute()
 
-	for minuto := abertura; minuto < fechamento; minuto += intervaloSlot {
-		// pausa (almoço etc.)
-		if pausaInicio >= 0 && minuto >= pausaInicio && minuto < pausaFim {
-			continue
-		}
-		if ehHoje && minuto <= minutoAgora {
+		// O final precisa estar dentro do expediente.
+		if minutoFim < abertura ||
+			minutoFim >= fechamento {
 			continue
 		}
 
-		slotIni := instante(data, minuto)
-		slotFim := slotIni.Add(intervaloSlot * time.Minute)
+		// Não cria horário dentro da pausa.
+		if pausaInicio >= 0 &&
+			pausaFim >= 0 &&
+			minutoFim >= pausaInicio &&
+			minutoFim < pausaFim {
+			continue
+		}
 
-		h := Horario{Hora: minutosParaHora(minuto), Disponivel: true}
+		pontos[minutoFim] = struct{}{}
+	}
 
-		// 1) já tem gente agendada nesse horário?
-		for _, ag := range agendamentos {
-			if sobrepoe(slotIni, slotFim, ag.Inicio, ag.Fim) {
-				id := ag.ID
-				h.Disponivel = false
-				h.Motivo = "agendado"
-				h.AgendamentoID = &id
-				h.Servicos = ag.Servicos
+	// Converte os pontos para slice.
+	minutos := make(
+		[]int,
+		0,
+		len(pontos),
+	)
+
+	for minuto := range pontos {
+		minutos = append(
+			minutos,
+			minuto,
+		)
+	}
+
+	// Mantém os horários em ordem cronológica.
+	sort.Ints(minutos)
+
+	horarios := make(
+		[]Horario,
+		0,
+		len(minutos),
+	)
+
+	for _, minuto := range minutos {
+
+		horarios = append(
+			horarios,
+			Horario{
+				Hora:       minutosParaHora(minuto),
+				Disponivel: true,
+				Servicos:   nil,
+			},
+		)
+	}
+
+	// ============================================================
+	// REMOVE HORÁRIOS QUE JÁ PASSARAM QUANDO A DATA É HOJE
+	// ============================================================
+
+	agora := time.Now()
+
+	if data.Format("2006-01-02") ==
+		agora.Format("2006-01-02") {
+
+		minutoAtual :=
+			agora.Hour()*60 +
+				agora.Minute()
+
+		filtrados := make(
+			[]Horario,
+			0,
+			len(horarios),
+		)
+
+		for _, horario := range horarios {
+
+			minutoHorario :=
+				horaParaMinutos(
+					horario.Hora,
+				)
+
+			if minutoHorario > minutoAtual {
+				filtrados = append(
+					filtrados,
+					horario,
+				)
+			}
+		}
+
+		horarios = filtrados
+	}
+
+	// ============================================================
+	// MARCA OS PONTOS QUE ESTÃO DENTRO DE UM AGENDAMENTO
+	//
+	// Aqui NÃO usamos mais:
+	//
+	//     inicio + 30 minutos
+	//
+	// Porque 30 minutos é apenas a grade visual.
+	//
+	// O agendamento real usa:
+	//
+	//     agendamento.Inicio -> agendamento.Fim
+	//
+	// Exemplo:
+	//
+	// 08:00 -> 08:40
+	//
+	// 08:00 = indisponível
+	// 08:30 = indisponível
+	// 08:40 = disponível
+	// ============================================================
+
+	for i := range horarios {
+
+		horarioMinutos :=
+			horaParaMinutos(
+				horarios[i].Hora,
+			)
+
+		inicio := time.Date(
+			data.Year(),
+			data.Month(),
+			data.Day(),
+			horarioMinutos/60,
+			horarioMinutos%60,
+			0,
+			0,
+			time.Local,
+		)
+
+		for _, agendamento :=
+			range agendamentos {
+
+			// O ponto está ocupado se estiver dentro
+			// do intervalo real do agendamento.
+			if !inicio.Before(agendamento.Inicio) &&
+				inicio.Before(agendamento.Fim) {
+
+				horarios[i].Disponivel = false
+
+				id := agendamento.ID
+				horarios[i].AgendamentoID = &id
+
 				break
 			}
 		}
-
-		// 2) bloqueio de horário do profissional
-		if h.Disponivel {
-			for _, b := range bloqueios {
-				if sobrepoe(slotIni, slotFim, b.Inicio, b.Fim) {
-					h.Disponivel = false
-					h.Motivo = "bloqueado"
-					break
-				}
-			}
-		}
-
-		horarios = append(horarios, h)
 	}
 
 	return 1, horarios, nil
 }
 
-// ============================================================
-// TELA DE AGENDAMENTO
-// ============================================================
-
-func (s *Service) SchedulePage(ctx context.Context, req SchedulePageRequest) (*ScheduleData, error) {
+func (s *Service) SchedulePage(
+	ctx context.Context,
+	req SchedulePageRequest,
+) (*ScheduleData, error) {
 	if req.SalaoID <= 0 {
 		return nil, ErrDadosInvalidos
 	}
 
-	if err := s.repository.VerificarSalao(ctx, req.SalaoID); err != nil {
+	if err := s.repository.VerificarSalao(
+		ctx,
+		req.SalaoID,
+	); err != nil {
 		return nil, err
 	}
 
-	// data escolhida (ou hoje)
-	dataSelecionada := agoraBR().Format("2006-01-02")
+	agora := time.Now()
+	hoje := agora.Format("2006-01-02")
+
+	// Data escolhida: a que veio na requisição (se válida e não passada) ou hoje.
+	dataSelecionada := hoje
+
 	if req.Data != "" {
-		if _, err := validarData(req.Data); err != nil {
+		data, err := validarData(req.Data)
+		if err != nil {
 			return nil, err
 		}
+
+		inicioDeHoje := time.Date(
+			agora.Year(),
+			agora.Month(),
+			agora.Day(),
+			0, 0, 0, 0,
+			time.Local,
+		)
+
+		if data.Before(inicioDeHoje) {
+			return nil, ErrDataInvalida
+		}
+
 		dataSelecionada = req.Data
 	}
 
-	textos, err := s.repository.BuscarTextos(ctx, req.SalaoID)
+	textos, err := s.repository.BuscarTextos(
+		ctx,
+		req.SalaoID,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	servicos, err := s.repository.BuscarServicos(ctx, req.SalaoID)
+	profissionais, err :=
+		s.repository.BuscarProfissionais(
+			ctx,
+			req.SalaoID,
+		)
 	if err != nil {
 		return nil, err
 	}
 
-	profissionais, err := s.repository.BuscarProfissionais(ctx, req.SalaoID)
-	if err != nil {
-		return nil, err
-	}
+	// Profissional escolhido: o da requisição ou o primeiro da lista.
+	var selecionado *Profissional
 
-	// profissional escolhido (ou o primeiro)
-	var profissionalSelecionado *int64
 	if req.ProfissionalID > 0 {
-		for _, p := range profissionais {
-			if p.ID == req.ProfissionalID {
-				id := p.ID
-				profissionalSelecionado = &id
+		for i := range profissionais {
+			if profissionais[i].ID == req.ProfissionalID {
+				selecionado = &profissionais[i]
 				break
 			}
 		}
-		if profissionalSelecionado == nil {
+
+		if selecionado == nil {
 			return nil, ErrProfissionalNaoEncontrado
 		}
 	} else if len(profissionais) > 0 {
-		id := profissionais[0].ID
-		profissionalSelecionado = &id
+		selecionado = &profissionais[0]
 	}
 
-	usaHorarios := 1
-	horarios := []Horario{}
+	servicos := make([]Servico, 0)
+	horarios := make([]Horario, 0)
 
-	if profissionalSelecionado != nil {
-		usaHorarios, horarios, err = s.BuscarHorarios(ctx, HorariosDisponiveisRequest{
-			SalaoID:        req.SalaoID,
-			ProfissionalID: *profissionalSelecionado,
-			Data:           dataSelecionada,
-		})
+	var profissionalSelecionado *int64
+	var usaHorarios int
+
+	if selecionado != nil {
+		id := selecionado.ID
+		profissionalSelecionado = &id
+
+		// Só os serviços que este profissional faz.
+		servicos, err =
+			s.repository.BuscarServicosDoProfissional(
+				ctx,
+				req.SalaoID,
+				id,
+			)
+		if err != nil {
+			return nil, err
+		}
+
+		usaHorarios, horarios, err =
+			s.BuscarHorarios(
+				ctx,
+				HorariosDisponiveisRequest{
+					SalaoID:        req.SalaoID,
+					ProfissionalID: id,
+					Data:           dataSelecionada,
+				},
+			)
 		if err != nil {
 			return nil, err
 		}
@@ -301,7 +704,7 @@ func (s *Service) SchedulePage(ctx context.Context, req SchedulePageRequest) (*S
 		Textos:               textos,
 		Servicos:             servicos,
 		Profissionais:        profissionais,
-		CurrentDate:          agoraBR().Format("2006-01-02"),
+		CurrentDate:          hoje,
 		UsaHorarios:          usaHorarios,
 		HorariosDisponiveis:  horarios,
 		SelectedProfissional: profissionalSelecionado,
@@ -309,13 +712,38 @@ func (s *Service) SchedulePage(ctx context.Context, req SchedulePageRequest) (*S
 	}, nil
 }
 
-// ============================================================
-// AGENDAR
-// ============================================================
-
-func (s *Service) Agendar(ctx context.Context, req AgendarRequest) (int64, error) {
+// ServicosDoProfissional devolve só os serviços que o profissional faz.
+// Usado quando o cliente troca de profissional na tela de agendamento.
+func (s *Service) ServicosDoProfissional(
+	ctx context.Context,
+	req ServicosProfissionalRequest,
+) ([]Servico, error) {
 	if req.SalaoID <= 0 ||
-		req.AuthUserID <= 0 ||
+		req.ProfissionalID <= 0 {
+		return nil, ErrDadosInvalidos
+	}
+
+	if _, err := s.repository.BuscarProfissional(
+		ctx,
+		req.SalaoID,
+		req.ProfissionalID,
+	); err != nil {
+		return nil, err
+	}
+
+	return s.repository.BuscarServicosDoProfissional(
+		ctx,
+		req.SalaoID,
+		req.ProfissionalID,
+	)
+}
+
+func (s *Service) Agendar(
+	ctx context.Context,
+	req AgendarRequest,
+) (int64, error) {
+	if req.SalaoID <= 0 ||
+		req.IDCliente <= 0 ||
 		req.ProfissionalID <= 0 ||
 		req.Data == "" ||
 		req.Hora == "" ||
@@ -328,95 +756,181 @@ func (s *Service) Agendar(ctx context.Context, req AgendarRequest) (int64, error
 		return 0, err
 	}
 
-	minutoInicio, err := validarHora(req.Hora)
+	hora, err := validarHora(req.Hora)
 	if err != nil {
 		return 0, err
 	}
 
-	agora := agoraBR()
-	hoje := time.Date(agora.Year(), agora.Month(), agora.Day(), 0, 0, 0, 0, localBR)
-	if data.Before(hoje) {
+	agora := time.Now()
+
+	inicioDeHoje := time.Date(
+		agora.Year(),
+		agora.Month(),
+		agora.Day(),
+		0, 0, 0, 0,
+		time.Local,
+	)
+
+	if data.Before(inicioDeHoje) {
 		return 0, ErrDataInvalida
 	}
 
-	profissional, err := s.repository.BuscarProfissional(ctx, req.SalaoID, req.ProfissionalID)
+	profissional, err :=
+		s.repository.BuscarProfissional(
+			ctx,
+			req.SalaoID,
+			req.ProfissionalID,
+		)
 	if err != nil {
 		return 0, err
 	}
+
 	if !profissional.UsaHorarios {
 		return 0, ErrProfissionalSemHorarios
 	}
 
-	if err := s.repository.VerificarCliente(ctx, req.AuthUserID); err != nil {
-		return 0, err
-	}
-
-	servicos, duracaoTotal, err := s.repository.BuscarServicosSelecionados(
-		ctx, req.SalaoID, req.ProfissionalID, req.ServicoIDs)
+	// Confere o cliente (uma única consulta).
+	authUserID, err :=
+		s.repository.BuscarClienteAuthUserID(
+			ctx,
+			req.IDCliente,
+		)
 	if err != nil {
 		return 0, err
 	}
+
+	// Confere que os serviços são do profissional e soma a duração.
+	servicos, duracaoTotal, err :=
+		s.repository.BuscarServicosSelecionados(
+			ctx,
+			req.SalaoID,
+			req.ProfissionalID,
+			req.ServicoIDs,
+		)
+	if err != nil {
+		return 0, err
+	}
+
 	if duracaoTotal <= 0 {
 		return 0, ErrServicoNaoEncontrado
 	}
 
-	// --- o horário precisa caber na grade do profissional ---
-	grade, err := s.repository.BuscarGrade(ctx, req.SalaoID, req.ProfissionalID, diaSemana(data))
+	grade, err :=
+		s.repository.BuscarGrade(
+			ctx,
+			req.SalaoID,
+			req.ProfissionalID,
+			diaSemana(data),
+		)
 	if errors.Is(err, ErrGradeNaoEncontrada) {
 		return 0, ErrHorarioIndisponivel
 	}
+
 	if err != nil {
 		return 0, err
 	}
+
 	if !grade.Abre {
 		return 0, ErrHorarioIndisponivel
 	}
 
-	abertura := horaParaMinutos(grade.Abertura)
-	fechamento := horaParaMinutos(grade.Fechamento)
-	minutoFim := minutoInicio + duracaoTotal
+	minutoInicio :=
+		hora.Hour()*60 +
+			hora.Minute()
 
-	if minutoInicio < abertura || minutoFim > fechamento {
+	minutoAbertura :=
+		horaParaMinutos(grade.Abertura)
+
+	minutoFechamento :=
+		horaParaMinutos(grade.Fechamento)
+
+	if minutoInicio < minutoAbertura {
 		return 0, ErrHorarioIndisponivel
 	}
 
-	// só aceita horários que existem na grade (de 30 em 30 a partir da abertura)
-	if (minutoInicio-abertura)%intervaloSlot != 0 {
-		return 0, ErrHoraInvalida
+	minutoFim :=
+		minutoInicio + duracaoTotal
+
+	if minutoFim > minutoFechamento {
+		return 0, ErrHorarioIndisponivel
 	}
 
-	if grade.PausaInicio != nil && grade.PausaFim != nil {
-		pausaInicio := horaParaMinutos(*grade.PausaInicio)
-		pausaFim := horaParaMinutos(*grade.PausaFim)
-		if minutoInicio < pausaFim && minutoFim > pausaInicio {
+	if grade.PausaInicio != nil &&
+		grade.PausaFim != nil {
+
+		pausaInicio :=
+			horaParaMinutos(*grade.PausaInicio)
+
+		pausaFim :=
+			horaParaMinutos(*grade.PausaFim)
+
+		if minutoInicio < pausaFim &&
+			minutoFim > pausaInicio {
 			return 0, ErrHorarioIndisponivel
 		}
 	}
 
-	inicio := instante(data, minutoInicio)
-	fim := instante(data, minutoFim)
+	// Data e hora escolhidas pelo cliente (vai para hora_marcada).
+	horaMarcada := time.Date(
+		data.Year(),
+		data.Month(),
+		data.Day(),
+		hora.Hour(),
+		hora.Minute(),
+		0,
+		0,
+		time.Local,
+	)
 
-	if !inicio.After(agora) {
-		return 0, ErrHorarioIndisponivel
+	// Fim previsto: só para conferir bloqueios de horário.
+	fimPrevisto := horaMarcada.Add(
+		time.Duration(duracaoTotal) * time.Minute,
+	)
+
+	// Hoje só vale para horários que ainda não passaram.
+	if data.Format("2006-01-02") ==
+		agora.Format("2006-01-02") {
+
+		if !horaMarcada.After(agora) {
+			return 0, ErrHorarioIndisponivel
+		}
 	}
 
-	// --- bloqueios do profissional ---
-	diaBloqueado, err := s.repository.VerificarDiaBloqueado(ctx, req.ProfissionalID, req.Data)
+	diaBloqueado, err :=
+		s.repository.VerificarDiaBloqueado(
+			ctx,
+			req.ProfissionalID,
+			req.Data,
+		)
 	if err != nil {
 		return 0, err
 	}
+
 	if diaBloqueado {
 		return 0, ErrDiaBloqueado
 	}
 
-	horarioBloqueado, err := s.repository.VerificarHorarioBloqueado(ctx, req.ProfissionalID, inicio, fim)
+	horarioBloqueado, err :=
+		s.repository.VerificarHorarioBloqueado(
+			ctx,
+			req.ProfissionalID,
+			horaMarcada,
+			fimPrevisto,
+		)
 	if err != nil {
 		return 0, err
 	}
+
 	if horarioBloqueado {
 		return 0, ErrHorarioBloqueado
 	}
 
-	// --- já tem gente agendada? (checagem final, dentro da transação) ---
-	return s.repository.CriarAgendamento(ctx, req, servicos, inicio, fim)
+	return s.repository.CriarAgendamento(
+		ctx,
+		req,
+		authUserID,
+		servicos,
+		horaMarcada,
+		duracaoTotal,
+	)
 }

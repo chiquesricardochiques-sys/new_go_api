@@ -107,13 +107,13 @@ func (r *Repository) Verify(
 
 	err := r.db.QueryRowContext(
 		ctx,
-		`SELECT status
+		`SELECT id, status
 		FROM profissionais
 		WHERE salao_id = ? AND auth_user_id = ?
 		LIMIT 1`,
 		req.IDSalao,
 		req.AuthUserID,
-	).Scan(&response.Status)
+	).Scan(&response.ProfissionalID, &response.Status)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		response.Existe = false

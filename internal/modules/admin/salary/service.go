@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -14,16 +15,30 @@ type Service struct {
 }
 
 func NewService(repository *Repository) *Service {
-	return &Service{repository: repository}
+	return &Service{
+		repository: repository,
+	}
 }
 
-func (s *Service) Rendimento(ctx context.Context, req Request) (ResponseData, error) {
+func (s *Service) Rendimento(
+	ctx context.Context,
+	req Request,
+) (ResponseData, error) {
+
 	if req.SalaoID <= 0 || req.ProfissionalID <= 0 {
 		return ResponseData{}, ErrInvalidData
 	}
 
-	mesFiltro, err := time.ParseInLocation("2006-01", req.MesAno, time.Local)
-	if err != nil || mesFiltro.Year() < 2000 || mesFiltro.Year() > 2200 {
+	mesFiltro, err := time.ParseInLocation(
+		"2006-01",
+		req.MesAno,
+		time.Local,
+	)
+	if err != nil {
+		return ResponseData{}, ErrInvalidData
+	}
+
+	if mesFiltro.Year() < 2000 || mesFiltro.Year() > 2200 {
 		return ResponseData{}, ErrInvalidData
 	}
 
@@ -37,51 +52,138 @@ func (s *Service) Rendimento(ctx context.Context, req Request) (ResponseData, er
 	}
 
 	agora := time.Now()
-	inicioHoje := time.Date(
-		agora.Year(), agora.Month(), agora.Day(),
-		0, 0, 0, 0, time.Local,
-	)
-	inicioAmanha := inicioHoje.AddDate(0, 0, 1)
 
-	inicioSemana := inicioHoje.AddDate(0, 0, -((int(inicioHoje.Weekday()) + 6) % 7))
+	// ---------------------------------------------------------
+	// HOJE
+	// ---------------------------------------------------------
+
+	inicioHoje := time.Date(
+		agora.Year(),
+		agora.Month(),
+		agora.Day(),
+		0,
+		0,
+		0,
+		0,
+		time.Local,
+	)
+
+	fimHoje := inicioHoje.AddDate(0, 0, 1)
+
+	// ---------------------------------------------------------
+	// SEMANA
+	// Segunda-feira 00:00 -> próxima segunda-feira 00:00
+	// ---------------------------------------------------------
+
+	diasDesdeSegunda := (int(inicioHoje.Weekday()) + 6) % 7
+
+	inicioSemana := inicioHoje.AddDate(
+		0,
+		0,
+		-diasDesdeSegunda,
+	)
+
 	fimSemana := inicioSemana.AddDate(0, 0, 7)
 
-	inicioMesAtual := time.Date(agora.Year(), agora.Month(), 1, 0, 0, 0, 0, time.Local)
+	// ---------------------------------------------------------
+	// MÊS ATUAL
+	// ---------------------------------------------------------
+
+	inicioMesAtual := time.Date(
+		agora.Year(),
+		agora.Month(),
+		1,
+		0,
+		0,
+		0,
+		0,
+		time.Local,
+	)
+
 	fimMesAtual := inicioMesAtual.AddDate(0, 1, 0)
 
-	inicioMesFiltro := time.Date(mesFiltro.Year(), mesFiltro.Month(), 1, 0, 0, 0, 0, time.Local)
+	// ---------------------------------------------------------
+	// MÊS FILTRADO
+	// ---------------------------------------------------------
+
+	inicioMesFiltro := time.Date(
+		mesFiltro.Year(),
+		mesFiltro.Month(),
+		1,
+		0,
+		0,
+		0,
+		0,
+		time.Local,
+	)
+
 	fimMesFiltro := inicioMesFiltro.AddDate(0, 1, 0)
 
-	hoje, err := s.calcularPeriodo(ctx, req, profissional, inicioHoje, inicioAmanha)
+	// ---------------------------------------------------------
+	// CONSULTAS
+	// ---------------------------------------------------------
+
+	hoje, err := s.calcularPeriodo(
+		ctx,
+		req,
+		profissional,
+		inicioHoje,
+		fimHoje,
+		false,
+	)
 	if err != nil {
 		return ResponseData{}, err
 	}
 
-	semana, err := s.calcularPeriodo(ctx, req, profissional, inicioSemana, fimSemana)
+	semana, err := s.calcularPeriodo(
+		ctx,
+		req,
+		profissional,
+		inicioSemana,
+		fimSemana,
+		false,
+	)
 	if err != nil {
 		return ResponseData{}, err
 	}
 
-	mesAtual, err := s.calcularPeriodo(ctx, req, profissional, inicioMesAtual, fimMesAtual)
+	mesAtual, err := s.calcularPeriodo(
+		ctx,
+		req,
+		profissional,
+		inicioMesAtual,
+		fimMesAtual,
+		true,
+	)
 	if err != nil {
 		return ResponseData{}, err
 	}
 
-	mesSelecionado, err := s.calcularPeriodo(ctx, req, profissional, inicioMesFiltro, fimMesFiltro)
+	mesFiltroPeriodo, err := s.calcularPeriodo(
+		ctx,
+		req,
+		profissional,
+		inicioMesFiltro,
+		fimMesFiltro,
+		true,
+	)
 	if err != nil {
 		return ResponseData{}, err
 	}
 
 	return ResponseData{
-		Nome:               profissional.Nome,
-		FotoURL:            profissional.FotoURL,
-		TipoRemuneracao:    profissional.TipoRemuneracao,
-		PercentualComissao: profissional.PercentualComissao,
-		SalarioFixo:        profissional.SalarioFixo,
-		Hoje:               hoje,
-		Semana:             semana,
-		MesAtual:           mesAtual,
-		MesFiltro:          mesSelecionado,
+		Nome:                profissional.Nome,
+		Especialidade:       profissional.Especialidade,
+		FotoURL:             profissional.FotoURL,
+		TipoRemuneracao:     profissional.TipoRemuneracao,
+		PercentualComissao:  profissional.PercentualComissao,
+		SalarioFixo:         profissional.SalarioFixo,
+		FrequenciaPagamento: profissional.FrequenciaPagamento,
+
+		Hoje:      hoje,
+		Semana:    semana,
+		MesAtual:  mesAtual,
+		MesFiltro: mesFiltroPeriodo,
 	}, nil
 }
 
@@ -89,34 +191,101 @@ func (s *Service) calcularPeriodo(
 	ctx context.Context,
 	req Request,
 	profissional ProfessionalSalary,
-	inicio, fim time.Time,
+	inicio time.Time,
+	fim time.Time,
+	aplicaSalarioFixo bool,
 ) (Periodo, error) {
-	agendamentos, err := s.repository.BuscarRendimentos(
+
+	dados, err := s.repository.BuscarPeriodo(
 		ctx,
 		req.SalaoID,
 		req.ProfissionalID,
 		inicio,
 		fim,
 	)
-	if err != nil {
-		return Periodo{}, fmt.Errorf("buscar rendimentos do período: %w", err)
-	}
 
-	var total float64
-	for _, agendamento := range agendamentos {
-		total += agendamento.Total
+	if err != nil {
+		return Periodo{}, fmt.Errorf(
+			"buscar período financeiro: %w",
+			err,
+		)
 	}
 
 	periodo := Periodo{
-		Qtd:         len(agendamentos),
-		TotalGerado: total,
+		Qtd:         dados.Qtd,
+		TotalGerado: arredondar(dados.TotalGerado),
 	}
 
-	// A comissão é calculada apenas para remuneração por comissão.
-	// As regras de pagamento fixo e misto precisam ser confirmadas.
-	if profissional.TipoRemuneracao == "comissao" {
-		periodo.ValorGanho = total * profissional.PercentualComissao / 100
+	switch profissional.TipoRemuneracao {
+
+	case "comissao":
+
+		periodo.Comissao = calcularComissao(
+			dados.TotalGerado,
+			profissional.PercentualComissao,
+		)
+
+		periodo.ValorGanho = periodo.Comissao
+
+	case "fixo":
+
+		// O salário fixo não deve ser repetido em
+		// "Hoje" e "Semana" como se fosse um pagamento.
+		//
+		// Para o mês, mostramos o salário contratado.
+		if aplicaSalarioFixo {
+			periodo.SalarioFixo = arredondar(
+				profissional.SalarioFixo,
+			)
+
+			periodo.ValorGanho = periodo.SalarioFixo
+		}
+
+	case "misto":
+
+		periodo.Comissao = calcularComissao(
+			dados.TotalGerado,
+			profissional.PercentualComissao,
+		)
+
+		if aplicaSalarioFixo {
+			periodo.SalarioFixo = arredondar(
+				profissional.SalarioFixo,
+			)
+
+			periodo.ValorGanho = arredondar(
+				periodo.SalarioFixo + periodo.Comissao,
+			)
+		} else {
+			// Fora do mês, mostramos somente a
+			// parte variável gerada pelo período.
+			periodo.ValorGanho = periodo.Comissao
+		}
+
+	default:
+		return Periodo{}, fmt.Errorf(
+			"tipo de remuneração inválido: %s",
+			profissional.TipoRemuneracao,
+		)
 	}
 
 	return periodo, nil
+}
+
+func calcularComissao(
+	faturamento float64,
+	percentual float64,
+) float64 {
+
+	if faturamento <= 0 || percentual <= 0 {
+		return 0
+	}
+
+	return arredondar(
+		faturamento * percentual / 100,
+	)
+}
+
+func arredondar(valor float64) float64 {
+	return math.Round(valor*100) / 100
 }

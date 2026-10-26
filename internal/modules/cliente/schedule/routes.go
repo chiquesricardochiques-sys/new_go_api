@@ -24,6 +24,11 @@ func RegisterRoutes(
 	)
 
 	mux.HandleFunc(
+		"POST /servicos-profissional",
+		handler.ServicosProfissional,
+	)
+
+	mux.HandleFunc(
 		"POST /agendar",
 		handler.Agendar,
 	)

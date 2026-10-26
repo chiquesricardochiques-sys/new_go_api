@@ -102,6 +102,40 @@ func (h *Handler) SchedulePage(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================
+// POST /servicos-profissional
+// ============================================================
+
+func (h *Handler) ServicosProfissional(w http.ResponseWriter, r *http.Request) {
+	var req ServicosProfissionalRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		falha(w, http.StatusBadRequest, "JSON inválido.")
+		return
+	}
+
+	servicos, err := h.service.ServicosDoProfissional(r.Context(), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrDadosInvalidos):
+			falha(w, http.StatusBadRequest, "salao_id e profissional_id são obrigatórios.")
+		case errors.Is(err, ErrProfissionalNaoEncontrado):
+			falha(w, http.StatusNotFound, "Profissional não encontrado.")
+		default:
+			log.Println("erro ao buscar serviços do profissional:", err)
+			falha(w, http.StatusInternalServerError, "Erro ao buscar serviços do profissional.")
+		}
+		return
+	}
+
+	escreverJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"servicos": servicos,
+		},
+	})
+}
+
+// ============================================================
 // POST /agendar
 // ============================================================
 
@@ -155,4 +189,3 @@ func (h *Handler) Agendar(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-

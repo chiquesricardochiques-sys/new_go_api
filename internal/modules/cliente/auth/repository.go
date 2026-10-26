@@ -11,6 +11,12 @@ var (
 	ErrSalaoNaoEncontrado   = errors.New("salão não encontrado")
 )
 
+// Relacao é o que existe em clientes_auth_vinculos para um usuário do Auth.
+type Relacao struct {
+	ID       int64
+	Telefone string // vazio quando ainda não foi informado
+}
+
 type Repository struct {
 	db *sql.DB
 }
@@ -60,31 +66,36 @@ func (r *Repository) VerificarSalao(
 func (r *Repository) BuscarRelacao(
 	ctx context.Context,
 	authUserID int64,
-) (int64, error) {
+) (*Relacao, error) {
 	const query = `
-		SELECT id
+		SELECT id, telefone
 		FROM clientes_auth_vinculos
 		WHERE auth_user_id = ?
 		LIMIT 1
 	`
 
-	var idCliente int64
+	var (
+		relacao  Relacao
+		telefone sql.NullString
+	)
 
 	err := r.db.QueryRowContext(
 		ctx,
 		query,
 		authUserID,
-	).Scan(&idCliente)
+	).Scan(&relacao.ID, &telefone)
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrRelacaoNaoEncontrada
+		return nil, ErrRelacaoNaoEncontrada
 	}
 
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	return idCliente, nil
+	relacao.Telefone = telefone.String
+
+	return &relacao, nil
 }
 
 // Adiciona o vínculo caso ainda não exista.
@@ -92,25 +103,38 @@ func (r *Repository) BuscarRelacao(
 // A UNIQUE KEY em auth_user_id garante que o mesmo usuário
 // não tenha dois vínculos.
 //
+// Telefone:
+//   - vazio ("") não grava nada e, se o vínculo já existe,
+//     mantém o telefone que já estava salvo;
+//   - preenchido grava no vínculo novo ou atualiza o do vínculo existente.
+//
 // Se o vínculo já existir, o LAST_INSERT_ID(id) faz com que
 // LastInsertId() retorne o ID existente.
+//
+// RowsAffected: 1 = inseriu, 2 = já existia e o telefone mudou,
+// 0 = já existia e nada mudou. Por isso "criado" continua sendo affected == 1.
 func (r *Repository) AdicionarRelacao(
 	ctx context.Context,
 	authUserID int64,
+	telefone string,
 ) (int64, bool, error) {
 	const query = `
 		INSERT INTO clientes_auth_vinculos (
-			auth_user_id
+			auth_user_id,
+			telefone
 		)
-		VALUES (?)
+		VALUES (?, NULLIF(?, ''))
 		ON DUPLICATE KEY UPDATE
-			id = LAST_INSERT_ID(id)
+			id = LAST_INSERT_ID(id),
+			telefone = COALESCE(NULLIF(?, ''), telefone)
 	`
 
 	result, err := r.db.ExecContext(
 		ctx,
 		query,
 		authUserID,
+		telefone,
+		telefone,
 	)
 
 	if err != nil {

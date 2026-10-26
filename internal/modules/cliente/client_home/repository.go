@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 )
 
 var (
@@ -209,60 +210,64 @@ func (r *Repository) BuscarAuthUserID(
 
 	return authUserID, nil
 }
-
 func (r *Repository) BuscarProximoAgendamento(
-	ctx context.Context,
-	salaoID int64,
-	idCliente int64,
+    ctx context.Context,
+    salaoID int64,
+    idCliente int64,
 ) (*ProximoAgendamento, error) {
-	authUserID, err := r.BuscarAuthUserID(
-		ctx,
-		idCliente,
-	)
-	if err != nil {
-		return nil, err
-	}
 
-	const query = `
-		SELECT
-			a.id,
-			a.inicio,
-			a.fim,
-			a.status,
-			p.nome AS profissional
-		FROM agendamentos a
-		INNER JOIN profissionais p
-			ON p.id = a.profissional_id
-		WHERE a.salao_id = ?
-			AND a.auth_user_id = ?
-			AND a.status IN ('pendente', 'confirmado')
-			AND a.inicio >= NOW()
-		ORDER BY a.inicio ASC
-		LIMIT 1
-	`
+    authUserID, err := r.BuscarAuthUserID(ctx, idCliente)
+    if err != nil {
+        return nil, err
+    }
 
-	var agendamento ProximoAgendamento
+    const query = `
+        SELECT
+            a.id,
+            a.hora_marcada,
+            a.duracao_minutos,
+            a.status,
+            p.nome AS profissional
+        FROM agendamentos a
+        INNER JOIN profissionais p
+            ON p.id = a.profissional_id
+        WHERE a.salao_id = ?
+          AND a.auth_user_id = ?
+          AND a.status IN ('pendente', 'confirmado')
+          AND a.hora_marcada >= NOW()
+        ORDER BY a.hora_marcada ASC
+        LIMIT 1
+    `
 
-	err = r.db.QueryRowContext(
-		ctx,
-		query,
-		salaoID,
-		authUserID,
-	).Scan(
-		&agendamento.ID,
-		&agendamento.Inicio,
-		&agendamento.Fim,
-		&agendamento.Status,
-		&agendamento.Profissional,
-	)
+    var agendamento ProximoAgendamento
+    var horaMarcada time.Time
+    var duracaoMinutos int
 
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+    err = r.db.QueryRowContext(
+        ctx,
+        query,
+        salaoID,
+        authUserID,
+    ).Scan(
+        &agendamento.ID,
+        &horaMarcada,
+        &duracaoMinutos,
+        &agendamento.Status,
+        &agendamento.Profissional,
+    )
 
-	if err != nil {
-		return nil, err
-	}
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, nil
+        }
 
-	return &agendamento, nil
+        return nil, err
+    }
+
+    agendamento.Inicio = horaMarcada
+    agendamento.Fim = horaMarcada.Add(
+        time.Duration(duracaoMinutos) * time.Minute,
+    )
+
+    return &agendamento, nil
 }
