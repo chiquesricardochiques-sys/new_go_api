@@ -29,6 +29,10 @@ import (
 	clienteDadosAgendamentos "github.com/ricardo-platform/salao-usuarios-api/internal/modules/cliente/dadosAgendamentos"
 	profissionalOps "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/operations"
 	controleStatus "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/controleStatus"
+
+	profissionalGrade "github.com/ricardo-platform/salao-usuarios-api/internal/modules/profissional/gradeHorarios"
+
+
 )
 
 // NewRouter registra as rotas da API.
@@ -115,7 +119,7 @@ func NewRouter(db *sql.DB) http.Handler {
 		mux,
 		db,
 	)
-
+	profissionalGrade.RegisterRoutes(mux, db)
 	// =====================================================
 	// CONFIGURAÇÕES DOS PROFISSIONAIS
 	// =====================================================
