@@ -295,6 +295,14 @@ func intervaloSobrepoe(
 
 // 	return 1, horarios, nil
 // }
+
+
+
+
+// ----------------------------
+
+
+
 func (s *Service) BuscarHorarios(
 	ctx context.Context,
 	req HorariosDisponiveisRequest,
@@ -356,6 +364,7 @@ func (s *Service) BuscarHorarios(
 		return 1, []Horario{}, nil
 	}
 
+	// 1. Buscar agendamentos do dia
 	agendamentos, err :=
 		s.repository.BuscarAgendamentosDoDia(
 			ctx,
@@ -367,119 +376,77 @@ func (s *Service) BuscarHorarios(
 		return 0, nil, err
 	}
 
-	abertura := horaParaMinutos(
-		grade.Abertura,
-	)
+	// 2. Buscar bloqueios do profissional no dia
+	bloqueios, err :=
+		s.repository.BuscarBloqueiosDoDia(
+			ctx,
+			req.ProfissionalID,
+			req.Data,
+		)
+	if err != nil {
+		return 0, nil, err
+	}
 
-	fechamento := horaParaMinutos(
-		grade.Fechamento,
-	)
+	abertura := horaParaMinutos(grade.Abertura)
+	fechamento := horaParaMinutos(grade.Fechamento)
 
 	pausaInicio := -1
 	pausaFim := -1
 
 	if grade.PausaInicio != nil &&
 		grade.PausaFim != nil {
-
-		pausaInicio = horaParaMinutos(
-			*grade.PausaInicio,
-		)
-
-		pausaFim = horaParaMinutos(
-			*grade.PausaFim,
-		)
+		pausaInicio = horaParaMinutos(*grade.PausaInicio)
+		pausaFim = horaParaMinutos(*grade.PausaFim)
 	}
-
-	// ============================================================
-	// MONTA OS PONTOS DE HORÁRIO
-	//
-	// Os 30 minutos continuam sendo a grade principal.
-	// Porém, o final de um agendamento também vira um ponto
-	// de horário disponível.
-	//
-	// Exemplo:
-	//
-	// 08:00 -> 08:40
-	//
-	// Grade:
-	// 08:00
-	// 08:30
-	// 09:00
-	//
-	// Autoajuste:
-	// 08:40
-	//
-	// Resultado:
-	// 08:00
-	// 08:30
-	// 08:40
-	// 09:00
-	// ============================================================
 
 	pontos := make(map[int]struct{})
 
 	// Grade normal de 30 em 30 minutos.
 	for minuto := abertura; minuto < fechamento; minuto += 30 {
-
 		if pausaInicio >= 0 &&
 			pausaFim >= 0 &&
 			minuto >= pausaInicio &&
 			minuto < pausaFim {
 			continue
 		}
-
 		pontos[minuto] = struct{}{}
 	}
 
 	// Adiciona o final real dos agendamentos como novo ponto.
 	for _, agendamento := range agendamentos {
-
 		minutoFim :=
 			agendamento.Fim.Hour()*60 +
 				agendamento.Fim.Minute()
 
-		// O final precisa estar dentro do expediente.
-		if minutoFim < abertura ||
-			minutoFim >= fechamento {
-			continue
+		if minutoFim >= abertura && minutoFim < fechamento {
+			if !(pausaInicio >= 0 && pausaFim >= 0 && minutoFim >= pausaInicio && minutoFim < pausaFim) {
+				pontos[minutoFim] = struct{}{}
+			}
 		}
-
-		// Não cria horário dentro da pausa.
-		if pausaInicio >= 0 &&
-			pausaFim >= 0 &&
-			minutoFim >= pausaInicio &&
-			minutoFim < pausaFim {
-			continue
-		}
-
-		pontos[minutoFim] = struct{}{}
 	}
 
-	// Converte os pontos para slice.
-	minutos := make(
-		[]int,
-		0,
-		len(pontos),
-	)
+	// Adiciona o final real dos bloqueios como novo ponto.
+	for _, bloqueio := range bloqueios {
+		minutoFim :=
+			bloqueio.Fim.Hour()*60 +
+				bloqueio.Fim.Minute()
 
+		if minutoFim >= abertura && minutoFim < fechamento {
+			if !(pausaInicio >= 0 && pausaFim >= 0 && minutoFim >= pausaInicio && minutoFim < pausaFim) {
+				pontos[minutoFim] = struct{}{}
+			}
+		}
+	}
+
+	minutos := make([]int, 0, len(pontos))
 	for minuto := range pontos {
-		minutos = append(
-			minutos,
-			minuto,
-		)
+		minutos = append(minutos, minuto)
 	}
 
-	// Mantém os horários em ordem cronológica.
 	sort.Ints(minutos)
 
-	horarios := make(
-		[]Horario,
-		0,
-		len(minutos),
-	)
-
+	horarios := make([]Horario, 0, len(minutos))
 	for _, minuto := range minutos {
-
 		horarios = append(
 			horarios,
 			Horario{
@@ -503,24 +470,13 @@ func (s *Service) BuscarHorarios(
 			agora.Hour()*60 +
 				agora.Minute()
 
-		filtrados := make(
-			[]Horario,
-			0,
-			len(horarios),
-		)
+		filtrados := make([]Horario, 0, len(horarios))
 
 		for _, horario := range horarios {
-
-			minutoHorario :=
-				horaParaMinutos(
-					horario.Hora,
-				)
+			minutoHorario := horaParaMinutos(horario.Hora)
 
 			if minutoHorario > minutoAtual {
-				filtrados = append(
-					filtrados,
-					horario,
-				)
+				filtrados = append(filtrados, horario)
 			}
 		}
 
@@ -528,33 +484,11 @@ func (s *Service) BuscarHorarios(
 	}
 
 	// ============================================================
-	// MARCA OS PONTOS QUE ESTÃO DENTRO DE UM AGENDAMENTO
-	//
-	// Aqui NÃO usamos mais:
-	//
-	//     inicio + 30 minutos
-	//
-	// Porque 30 minutos é apenas a grade visual.
-	//
-	// O agendamento real usa:
-	//
-	//     agendamento.Inicio -> agendamento.Fim
-	//
-	// Exemplo:
-	//
-	// 08:00 -> 08:40
-	//
-	// 08:00 = indisponível
-	// 08:30 = indisponível
-	// 08:40 = disponível
+	// MARCA OS PONTOS OCUPADOS (AGENDAMENTOS OU BLOQUEIOS)
 	// ============================================================
 
 	for i := range horarios {
-
-		horarioMinutos :=
-			horaParaMinutos(
-				horarios[i].Hora,
-			)
+		horarioMinutos := horaParaMinutos(horarios[i].Hora)
 
 		inicio := time.Date(
 			data.Year(),
@@ -567,26 +501,39 @@ func (s *Service) BuscarHorarios(
 			time.Local,
 		)
 
-		for _, agendamento :=
-			range agendamentos {
-
-			// O ponto está ocupado se estiver dentro
-			// do intervalo real do agendamento.
+		// Verifica agendamentos
+		for _, agendamento := range agendamentos {
 			if !inicio.Before(agendamento.Inicio) &&
 				inicio.Before(agendamento.Fim) {
 
 				horarios[i].Disponivel = false
-
 				id := agendamento.ID
 				horarios[i].AgendamentoID = &id
-
 				break
+			}
+		}
+
+		// Verifica bloqueios de horário do profissional
+		if horarios[i].Disponivel {
+			for _, bloqueio := range bloqueios {
+				if !inicio.Before(bloqueio.Inicio) &&
+					inicio.Before(bloqueio.Fim) {
+
+					horarios[i].Disponivel = false
+					break
+				}
 			}
 		}
 	}
 
 	return 1, horarios, nil
 }
+
+
+
+
+
+
 
 func (s *Service) SchedulePage(
 	ctx context.Context,
