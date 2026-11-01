@@ -1,3 +1,4 @@
+
 package schedule
 
 import (
@@ -151,7 +152,11 @@ func (h *Handler) Agendar(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrDadosInvalidos):
-			falha(w, http.StatusBadRequest, "Informe salão, usuário, profissional, serviço, data e horário.")
+			falha(
+				w,
+				http.StatusBadRequest,
+				"Informe salão, cliente, nome, telefone, profissional, serviço, data e horário.",
+			)
 		case errors.Is(err, ErrDataInvalida):
 			falha(w, http.StatusBadRequest, "Data inválida ou não disponível.")
 		case errors.Is(err, ErrHoraInvalida):

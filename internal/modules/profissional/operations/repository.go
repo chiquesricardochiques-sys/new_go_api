@@ -86,7 +86,16 @@ func (r *Repository) BuscarPorAuthUser(ctx context.Context, idSalao, authUserID 
 
 // ListarAgendamentos devolve os agendamentos já agrupados (1 item por agendamento,
 // com a lista de serviços). Sempre filtra por salao_id + profissional_id.
-func (r *Repository) ListarAgendamentos(ctx context.Context, f FiltroAgendamentos) ([]AgendamentoItem, error) {
+// ListarAgendamentos devolve os agendamentos agrupados,
+// com os dados do cliente diretamente da tabela agendamentos.
+// A origem é identificada pelo auth_user_id:
+// NULL = avulso_admin
+// preenchido = site.
+func (r *Repository) ListarAgendamentos(
+	ctx context.Context,
+	f FiltroAgendamentos,
+) ([]AgendamentoItem, error) {
+
 	query := `
 		SELECT
 			a.id,
@@ -95,36 +104,61 @@ func (r *Repository) ListarAgendamentos(ctx context.Context, f FiltroAgendamento
 			DATE_FORMAT(a.fim, '%H:%i'),
 			a.status,
 			COALESCE(a.observacao, ''),
-			a.auth_user_id,
+			COALESCE(a.nome_cliente, ''),
+			COALESCE(a.telefone_cliente, ''),
+			CASE
+				WHEN a.auth_user_id IS NULL THEN 'avulso_admin'
+				ELSE 'site'
+			END AS origem,
 			COALESCE(a.percentual_comissao, p.percentual_comissao),
 			spa.nome_servico_snapshot,
 			spa.duracao_minutos,
 			spa.quantidade,
 			spa.preco_unitario
 		FROM agendamentos a
-		JOIN profissionais p ON p.id = a.profissional_id
-		LEFT JOIN servico_por_agendamento spa ON spa.agendamento_id = a.id
-		WHERE a.salao_id = ? AND a.profissional_id = ?`
+		INNER JOIN profissionais p
+			ON p.id = a.profissional_id
+			AND p.salao_id = a.salao_id
+		LEFT JOIN servico_por_agendamento spa
+			ON spa.agendamento_id = a.id
+		WHERE a.salao_id = ?
+			AND a.profissional_id = ?
+	`
 
-	args := []any{f.IDSalao, f.ProfissionalID}
+	args := []any{
+		f.IDSalao,
+		f.ProfissionalID,
+	}
 
 	if f.Inicio != "" {
 		query += ` AND a.inicio >= ?`
 		args = append(args, f.Inicio)
 	}
+
 	if f.Fim != "" {
 		query += ` AND a.inicio < ?`
 		args = append(args, f.Fim)
 	}
+
 	if f.Status != "" {
 		query += ` AND a.status = ?`
 		args = append(args, f.Status)
 	}
 
 	if f.Desc {
-		query += ` ORDER BY a.inicio DESC, a.id DESC, spa.id ASC`
+		query += `
+			ORDER BY
+				a.inicio DESC,
+				a.id DESC,
+				spa.id ASC
+		`
 	} else {
-		query += ` ORDER BY a.inicio ASC, a.id ASC, spa.id ASC`
+		query += `
+			ORDER BY
+				a.inicio ASC,
+				a.id ASC,
+				spa.id ASC
+		`
 	}
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -134,27 +168,48 @@ func (r *Repository) ListarAgendamentos(ctx context.Context, f FiltroAgendamento
 	defer rows.Close()
 
 	itens := make(map[int64]*AgendamentoItem)
-	ordem := make([]int64, 0)
+	var resultado []AgendamentoItem
 
 	for rows.Next() {
 		var (
-			id, clienteID                int64
-			data, hora, horaFim, status  string
-			observacao                   string
-			comissao                     float64
-			nomeServico                  sql.NullString
-			duracao, quantidade          sql.NullInt64
-			preco                        sql.NullFloat64
+			id                         int64
+			data                       string
+			hora                       string
+			horaFim                    string
+			status                     string
+			observacao                 string
+			nomeCliente                string
+			telefone                   string
+			origem                     string
+			comissao                   float64
+			nomeServico                sql.NullString
+			duracao                    sql.NullInt64
+			quantidade                 sql.NullInt64
+			preco                      sql.NullFloat64
 		)
 
-		if err := rows.Scan(
-			&id, &data, &hora, &horaFim, &status, &observacao, &clienteID,
-			&comissao, &nomeServico, &duracao, &quantidade, &preco,
-		); err != nil {
+		err := rows.Scan(
+			&id,
+			&data,
+			&hora,
+			&horaFim,
+			&status,
+			&observacao,
+			&nomeCliente,
+			&telefone,
+			&origem,
+			&comissao,
+			&nomeServico,
+			&duracao,
+			&quantidade,
+			&preco,
+		)
+		if err != nil {
 			return nil, err
 		}
 
 		item, existe := itens[id]
+
 		if !existe {
 			item = &AgendamentoItem{
 				ID:                 id,
@@ -163,32 +218,49 @@ func (r *Repository) ListarAgendamentos(ctx context.Context, f FiltroAgendamento
 				HoraFim:            horaFim,
 				Status:             status,
 				Observacoes:        observacao,
-				ClienteID:          clienteID,
-				Cliente:            "N/A",
+				Cliente:            nomeCliente,
+				NomeCliente:        nomeCliente,
+				TelefoneCliente:    telefone,
+				Origem:             origem,
 				Servicos:           []string{},
 				PercentualComissao: comissao,
 			}
+
 			itens[id] = item
-			ordem = append(ordem, id)
+			resultado = append(resultado, *item)
 		}
 
 		if nomeServico.Valid {
 			qtd := int64(1)
+
 			if quantidade.Valid && quantidade.Int64 > 0 {
 				qtd = quantidade.Int64
 			}
-			item.Servicos = append(item.Servicos, nomeServico.String)
-			item.DuracaoTotal += int(duracao.Int64 * qtd)
-			item.PrecoTotal += preco.Float64 * float64(qtd)
+
+			item.Servicos = append(
+				item.Servicos,
+				nomeServico.String,
+			)
+
+			if duracao.Valid {
+				item.DuracaoTotal += int(duracao.Int64 * qtd)
+			}
+
+			if preco.Valid {
+				item.PrecoTotal += preco.Float64 * float64(qtd)
+			}
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	resultado := make([]AgendamentoItem, 0, len(ordem))
-	for _, id := range ordem {
-		resultado = append(resultado, *itens[id])
+	// Atualiza os itens do resultado com os serviços e valores acumulados.
+	for i := range resultado {
+		if item, existe := itens[resultado[i].ID]; existe {
+			resultado[i] = *item
+		}
 	}
 
 	return resultado, nil

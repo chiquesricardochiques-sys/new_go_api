@@ -790,6 +790,8 @@ func (r *Repository) CriarAgendamento(
 			salao_id,
 			profissional_id,
 			auth_user_id,
+			nome_cliente,
+			telefone_cliente,
 			hora_marcada,
 			duracao_minutos,
 			inicio,
@@ -798,15 +800,7 @@ func (r *Repository) CriarAgendamento(
 			observacao
 		)
 		VALUES (
-			?,
-			?,
-			?,
-			?,
-			?,
-			?,
-			?,
-			'pendente',
-			?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendente', ?
 		)
 	`
 
@@ -816,12 +810,15 @@ func (r *Repository) CriarAgendamento(
 		req.SalaoID,
 		req.ProfissionalID,
 		authUserID,
+		req.NomeCliente,
+		req.TelefoneCliente,
 		inicioTexto,
 		duracaoMinutos,
 		inicioTexto,
 		fimTexto,
 		observacao,
 	)
+
 	if err != nil {
 		return 0, err
 	}
@@ -871,4 +868,77 @@ func (r *Repository) CriarAgendamento(
 	}
 
 	return agendamentoID, nil
+}
+
+
+
+type BloqueioExistente struct {
+	ID     int64
+	Inicio time.Time
+	Fim    time.Time
+}
+
+func (r *Repository) BuscarBloqueiosDoDia(
+	ctx context.Context,
+	profissionalID int64,
+	data string,
+) ([]BloqueioExistente, error) {
+	const query = `
+		SELECT
+			b.id,
+			DATE_FORMAT(b.inicio, '%Y-%m-%d %H:%i:%s'),
+			DATE_FORMAT(b.fim, '%Y-%m-%d %H:%i:%s')
+		FROM profissional_horarios_bloqueados b
+		WHERE b.profissional_id = ?
+		  AND b.inicio < DATE_ADD(?, INTERVAL 1 DAY)
+		  AND b.fim > ?
+		ORDER BY b.inicio ASC
+	`
+
+	rows, err := r.db.QueryContext(
+		ctx,
+		query,
+		profissionalID,
+		data,
+		data,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bloqueios := make([]BloqueioExistente, 0)
+
+	for rows.Next() {
+		var (
+			item      BloqueioExistente
+			inicioStr string
+			fimStr    string
+		)
+
+		if err := rows.Scan(&item.ID, &inicioStr, &fimStr); err != nil {
+			return nil, err
+		}
+
+		inicio, err := time.ParseInLocation(layoutDataHora, inicioStr, time.Local)
+		if err != nil {
+			return nil, err
+		}
+
+		fim, err := time.ParseInLocation(layoutDataHora, fimStr, time.Local)
+		if err != nil {
+			return nil, err
+		}
+
+		item.Inicio = inicio
+		item.Fim = fim
+
+		bloqueios = append(bloqueios, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return bloqueios, nil
 }

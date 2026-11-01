@@ -95,6 +95,9 @@ type AgendamentoItem struct {
 	DuracaoTotal       int      `json:"duracao_total"`
 	PrecoTotal         float64  `json:"preco_total"`
 	PercentualComissao float64  `json:"percentual_comissao"`
+	NomeCliente     string `json:"nome_cliente"`
+	TelefoneCliente string `json:"telefone_cliente"`
+	Origem          string `json:"origem"`
 }
 
 type AgendaResponse struct {

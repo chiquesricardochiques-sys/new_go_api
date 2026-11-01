@@ -21,10 +21,12 @@ func NewService(repository *Repository) *Service {
 	}
 }
 
+// validarIDs: só o auth_user_id é obrigatório.
+// O vínculo é global (um por usuário do Auth); o salao_id é opcional.
 func validarIDs(req RelacaoRequest) error {
-	if req.AuthUserID <= 0 || req.SalaoID <= 0 {
+	if req.AuthUserID <= 0 {
 		return fmt.Errorf(
-			"%w: auth_user_id e salao_id são obrigatórios",
+			"%w: auth_user_id é obrigatório",
 			ErrDadosInvalidos,
 		)
 	}
@@ -78,20 +80,17 @@ func (s *Service) Verificar(
 		return nil, err
 	}
 
-	// O salão enviado pelo site/app precisa existir
-	// e estar ativo.
-	if err := s.repository.VerificarSalao(
-		ctx,
-		req.SalaoID,
-	); err != nil {
-		return nil, err
+	// O salão é opcional: se vier, precisa existir e estar ativo.
+	if req.SalaoID > 0 {
+		if err := s.repository.VerificarSalao(ctx, req.SalaoID); err != nil {
+			return nil, err
+		}
 	}
 
 	relacao, err := s.repository.BuscarRelacao(
 		ctx,
 		req.AuthUserID,
 	)
-
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +117,11 @@ func (s *Service) Adicionar(
 		return nil, false, err
 	}
 
-	// Primeiro valida o salão.
-	if err := s.repository.VerificarSalao(
-		ctx,
-		req.SalaoID,
-	); err != nil {
-		return nil, false, err
+	// O salão é opcional: se vier, precisa existir e estar ativo.
+	if req.SalaoID > 0 {
+		if err := s.repository.VerificarSalao(ctx, req.SalaoID); err != nil {
+			return nil, false, err
+		}
 	}
 
 	_, criado, err := s.repository.AdicionarRelacao(
@@ -131,7 +129,6 @@ func (s *Service) Adicionar(
 		req.AuthUserID,
 		telefone,
 	)
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -142,7 +139,6 @@ func (s *Service) Adicionar(
 		ctx,
 		req.AuthUserID,
 	)
-
 	if err != nil {
 		return nil, false, err
 	}

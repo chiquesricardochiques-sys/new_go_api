@@ -111,7 +111,7 @@ func (h *Handler) Verificar(
 		http.StatusOK,
 		response{
 			Success: true,
-			Data: relacao,
+			Data:    relacao,
 		},
 	)
 }

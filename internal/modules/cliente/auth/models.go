@@ -2,6 +2,7 @@ package cliente
 
 // RelacaoRequest: o telefone é opcional e pode vir com máscara,
 // por exemplo "(19) 99999-8888". O service normaliza antes de gravar.
+// O salao_id é opcional (o vínculo é global); se vier, o salão é validado.
 type RelacaoRequest struct {
 	AuthUserID int64  `json:"auth_user_id"`
 	SalaoID    int64  `json:"salao_id"`

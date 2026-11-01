@@ -25,13 +25,17 @@ type ServicosProfissionalRequest struct {
 }
 
 type AgendarRequest struct {
-	SalaoID        int64   `json:"salao_id"`
-	IDCliente      int64   `json:"id_cliente"`
-	ServicoIDs     []int64 `json:"servico_ids"`
-	ProfissionalID int64   `json:"profissional_id"`
-	Data           string  `json:"data"`
-	Hora           string  `json:"hora"`
-	Observacao     *string `json:"observacao"`
+    SalaoID        int64   `json:"salao_id"`
+    IDCliente      int64   `json:"id_cliente"`
+
+    NomeCliente    string  `json:"nome_cliente"`
+    TelefoneCliente string `json:"telefone_cliente"`
+
+    ServicoIDs     []int64 `json:"servico_ids"`
+    ProfissionalID int64   `json:"profissional_id"`
+    Data           string  `json:"data"`
+    Hora           string  `json:"hora"`
+    Observacao     *string `json:"observacao"`
 }
 
 // ============================================================
