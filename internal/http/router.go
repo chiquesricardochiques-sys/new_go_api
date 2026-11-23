@@ -1,4 +1,3 @@
-
 package httpapi
 
 import (
@@ -10,6 +9,7 @@ import (
 
 	adminAdmins "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/admins"
 	adminAvisos "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/avisos"
+	adminCodaces "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/codaces"
 	adminConfProf "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/conf_prof"
 	adminDashboard "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/dashboard"
 	adminMysaloes "github.com/ricardo-platform/salao-usuarios-api/internal/modules/admin/mysaloes"
@@ -112,6 +112,12 @@ func NewRouter(db *sql.DB) http.Handler {
 	// =====================================================
 
 	adminSalao.RegisterRoutes(mux, db)
+
+	// =====================================================
+	// VÍNCULO APP E PROFISSIONAIS - CÓDIGOS
+	// =====================================================
+
+	adminCodaces.RegisterRoutes(mux, db)
 
 	// =====================================================
 	// TEXTOS E INFORMAÇÕES DO SALÃO
