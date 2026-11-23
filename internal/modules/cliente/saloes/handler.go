@@ -34,20 +34,29 @@ func (h *Handler) responderErro(w http.ResponseWriter, err error, contexto strin
 		falha(w, http.StatusBadRequest, "Dados inválidos.")
 	case errors.Is(err, ErrSalaoNaoEncontrado):
 		falha(w, http.StatusNotFound, "Salão não encontrado ou inativo.")
+	case errors.Is(err, ErrNaoPodeAvaliar):
+		falha(w, http.StatusConflict, "Este atendimento não pode ser avaliado.")
 	default:
 		log.Println(contexto, err)
 		falha(w, http.StatusInternalServerError, "Erro interno ao processar a solicitação.")
 	}
 }
 
-// POST /saloes/buscar
-func (h *Handler) Buscar(w http.ResponseWriter, r *http.Request) {
+func lerJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var req BuscarRequest
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		falha(w, http.StatusBadRequest, "JSON inválido.")
+		return false
+	}
+
+	return true
+}
+
+// POST /saloes/buscar
+func (h *Handler) Buscar(w http.ResponseWriter, r *http.Request) {
+	var req BuscarRequest
+	if !lerJSON(w, r, &req) {
 		return
 	}
 
@@ -65,12 +74,8 @@ func (h *Handler) Buscar(w http.ResponseWriter, r *http.Request) {
 
 // POST /saloes/por-slug
 func (h *Handler) PorSlug(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
 	var req PorSlugRequest
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		falha(w, http.StatusBadRequest, "JSON inválido.")
+	if !lerJSON(w, r, &req) {
 		return
 	}
 
@@ -85,6 +90,43 @@ func (h *Handler) PorSlug(w http.ResponseWriter, r *http.Request) {
 		"data": map[string]any{
 			"salao": salao,
 		},
+	})
+}
+
+// POST /saloes/detalhes
+func (h *Handler) Detalhes(w http.ResponseWriter, r *http.Request) {
+	var req PorSlugRequest
+	if !lerJSON(w, r, &req) {
+		return
+	}
+
+	data, err := h.service.Detalhes(r.Context(), req)
+	if err != nil {
+		h.responderErro(w, err, "erro ao buscar detalhes do salão:")
+		return
+	}
+
+	escreverJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    data,
+	})
+}
+
+// POST /saloes/avaliar
+func (h *Handler) Avaliar(w http.ResponseWriter, r *http.Request) {
+	var req AvaliarRequest
+	if !lerJSON(w, r, &req) {
+		return
+	}
+
+	if err := h.service.Avaliar(r.Context(), req); err != nil {
+		h.responderErro(w, err, "erro ao avaliar atendimento:")
+		return
+	}
+
+	escreverJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Avaliação registrada.",
 	})
 }
 

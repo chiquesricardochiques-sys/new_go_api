@@ -11,7 +11,6 @@ var origensPermitidas = map[string]bool{
 	"http://localhost:19006": true,
 	"http://127.0.0.1:19006": true,
 }
-
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")

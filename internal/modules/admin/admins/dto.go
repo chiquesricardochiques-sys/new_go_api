@@ -1,10 +1,4 @@
-
 package admins
-
-type AddRelationsRequest struct {
-	IDSalao    int64 `json:"id_salao"`
-	AuthUserID int64 `json:"auth_user_id"`
-}
 
 type VerifyRequest struct {
 	IDSalao    int64 `json:"id_salao"`
@@ -12,9 +6,9 @@ type VerifyRequest struct {
 }
 
 type VerifyResponse struct {
-	Existe    bool   `json:"existe"`
-	Ativo     bool   `json:"ativo"`
-	IDSalao   int64  `json:"id_salao"`
-	AuthUserID int64 `json:"auth_user_id"`
-	Status    string `json:"status,omitempty"`
+	Existe     bool   `json:"existe"`
+	Ativo      bool   `json:"ativo"`
+	IDSalao    int64  `json:"id_salao"`
+	AuthUserID int64  `json:"auth_user_id"`
+	Status     string `json:"status,omitempty"`
 }

@@ -1,9 +1,9 @@
-
 package admins
 
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 )
 
@@ -42,27 +42,7 @@ func lerJSON(
 	return true
 }
 
-func (h *Handler) AddRelations(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	var req AddRelationsRequest
-
-	if !lerJSON(w, r, &req) {
-		return
-	}
-
-	if err := h.service.AddRelations(r.Context(), req); err != nil {
-		h.erro(w, err)
-		return
-	}
-
-	responder(w, http.StatusCreated, map[string]any{
-		"success": true,
-		"message": "Vínculo administrativo criado.",
-	})
-}
-
+// POST /api/admin/admins/verify
 func (h *Handler) Verify(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -93,19 +73,9 @@ func (h *Handler) erro(w http.ResponseWriter, err error) {
 			"message": err.Error(),
 		})
 
-	case errors.Is(err, ErrSalaoInvalido):
-		responder(w, http.StatusNotFound, map[string]any{
-			"success": false,
-			"message": err.Error(),
-		})
-
-	case errors.Is(err, ErrDuplicado):
-		responder(w, http.StatusConflict, map[string]any{
-			"success": false,
-			"message": err.Error(),
-		})
-
 	default:
+		log.Println("erro ao verificar vínculo administrativo:", err)
+
 		responder(w, http.StatusInternalServerError, map[string]any{
 			"success": false,
 			"message": "Erro ao processar o vínculo administrativo.",

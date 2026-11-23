@@ -1,4 +1,3 @@
-
 package admins
 
 import (
@@ -27,21 +26,6 @@ func validarIDs(idSalao, authUserID int64) error {
 	}
 
 	return nil
-}
-
-func (s *Service) AddRelations(
-	ctx context.Context,
-	req AddRelationsRequest,
-) error {
-	if err := validarIDs(req.IDSalao, req.AuthUserID); err != nil {
-		return err
-	}
-
-	return s.repository.AddRelations(
-		ctx,
-		req.IDSalao,
-		req.AuthUserID,
-	)
 }
 
 func (s *Service) Verify(

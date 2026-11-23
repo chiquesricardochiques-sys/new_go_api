@@ -15,5 +15,7 @@ func RegisterRoutes(
 
 	mux.HandleFunc("POST /saloes/buscar", handler.Buscar)
 	mux.HandleFunc("POST /saloes/por-slug", handler.PorSlug)
+	mux.HandleFunc("POST /saloes/detalhes", handler.Detalhes)
+	mux.HandleFunc("POST /saloes/avaliar", handler.Avaliar)
 	mux.HandleFunc("POST /saloes/cidades", handler.Cidades)
 }

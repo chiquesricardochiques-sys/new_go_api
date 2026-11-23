@@ -4,6 +4,8 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"time"
+	_ "time/tzdata" // garante o fuso em containers sem tzdata
 )
 
 const (
@@ -12,6 +14,17 @@ const (
 )
 
 var regexSlug = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// Mesmo valor do enum horario_funcionamento.dia_semana, indexado por time.Weekday
+var diasSemana = [...]string{"dom", "seg", "ter", "qua", "qui", "sex", "sab"}
+
+var fusoBrasil = func() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		return time.FixedZone("BRT", -3*3600)
+	}
+	return loc
+}()
 
 type Service struct {
 	repository *Repository
@@ -27,6 +40,12 @@ func truncar(s string, max int) string {
 		r = r[:max]
 	}
 	return string(r)
+}
+
+func slugValido(s string) (string, bool) {
+	slug := strings.ToLower(strings.TrimSpace(s))
+	ok := slug != "" && len(slug) <= 180 && regexSlug.MatchString(slug)
+	return slug, ok
 }
 
 func (s *Service) Buscar(
@@ -63,6 +82,8 @@ func (s *Service) Buscar(
 		offset = 0
 	}
 
+	agora := time.Now().In(fusoBrasil)
+
 	// pede 1 a mais só para saber se existe próxima página
 	itens, err := s.repository.Buscar(ctx, filtro{
 		Busca:      truncar(req.Busca, 100),
@@ -73,6 +94,8 @@ func (s *Service) Buscar(
 		AuthUserID: req.AuthUserID,
 		Limite:     limite + 1,
 		Offset:     offset,
+		Dia:        diasSemana[agora.Weekday()],
+		Hora:       agora.Format("15:04:05"),
 	})
 	if err != nil {
 		return nil, err
@@ -95,13 +118,38 @@ func (s *Service) PorSlug(
 	ctx context.Context,
 	req PorSlugRequest,
 ) (*SalaoItem, error) {
-	slug := strings.ToLower(strings.TrimSpace(req.Slug))
-
-	if slug == "" || len(slug) > 180 || !regexSlug.MatchString(slug) {
+	slug, ok := slugValido(req.Slug)
+	if !ok {
 		return nil, ErrDadosInvalidos
 	}
 
 	return s.repository.BuscarPorSlug(ctx, slug)
+}
+
+func (s *Service) Detalhes(
+	ctx context.Context,
+	req PorSlugRequest,
+) (*DetalhesData, error) {
+	slug, ok := slugValido(req.Slug)
+	if !ok {
+		return nil, ErrDadosInvalidos
+	}
+
+	return s.repository.Detalhes(ctx, slug)
+}
+
+func (s *Service) Avaliar(
+	ctx context.Context,
+	req AvaliarRequest,
+) error {
+	if req.AuthUserID <= 0 || req.AgendamentoID <= 0 ||
+		req.Nota < 1 || req.Nota > 5 {
+		return ErrDadosInvalidos
+	}
+
+	req.Comentario = truncar(req.Comentario, 500)
+
+	return s.repository.Avaliar(ctx, req)
 }
 
 func (s *Service) Cidades(ctx context.Context) ([]Cidade, error) {

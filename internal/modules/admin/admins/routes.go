@@ -1,4 +1,3 @@
-
 package admins
 
 import (
@@ -11,11 +10,8 @@ func RegisterRoutes(mux *http.ServeMux, db *sql.DB) {
 	service := NewService(repository)
 	handler := NewHandler(service)
 
-	mux.HandleFunc(
-		"POST /api/admin/admins/addRelations",
-		handler.AddRelations,
-	)
-
+	// A rota addRelations foi removida: o vínculo agora nasce ao criar o salão
+	// (módulo mysaloes), nunca por chamada direta com ids vindos do cliente.
 	mux.HandleFunc(
 		"POST /api/admin/admins/verify",
 		handler.Verify,
